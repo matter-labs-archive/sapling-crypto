@@ -29,7 +29,7 @@ impl ASWaksman
 
     fn set_inputs(&mut self, input: Vec<u32>)
     {
-        for i in 0..input.len()-1
+        for i in 0..input.len()
         {
             self.m_inputs[i] = input[i];
         }
@@ -47,6 +47,7 @@ impl ASWaksman
 
         if self.m_size == 2 
         {
+            
             if self.m_gates[0] == true
             {
                 self.m_outputs[0] = self.m_inputs[1];
@@ -158,6 +159,9 @@ impl ASWaksman
                 tmp_input[i*2+1] = tmp;
             }
         }
+
+        // todo:: re direct inputs
+
         println!("fg: {:?} {:?} s:{}", tmp_input, self.m_inputs, self.m_size);
         // send into recursive wakeman
         if self.m_top.len() != 0
@@ -168,9 +172,10 @@ impl ASWaksman
             {
                 tmp_top_input[i as usize] = tmp_input[i as usize];
             }
+            println!("top calc {} {:?}" , top_size, tmp_top_input);
             self.m_top[0].set_inputs(tmp_top_input);
-            //println!("top calc");
             self.m_top[0].calculate_outputs();
+            println!("top result {:?}" , self.m_top[0].m_outputs);
         }
 
         if self.m_bot.len() != 0
@@ -185,13 +190,19 @@ impl ASWaksman
                     top_size_for_bot = self.m_top[0].m_size;
                 }
                 let offset_counter_bottom = i + top_size_for_bot;
-                //println!("i {} {} {}", i, offset_counter_bottom, tmp_input.len());
-                if offset_counter_bottom as u32 >= (tmp_input.len() as u32) { break; }
-                tmp_bot_input[i as usize] = tmp_input[offset_counter_bottom as usize];
+                if offset_counter_bottom >= self.m_size
+                {
+                    tmp_bot_input[i as usize] = tmp_input[tmp_input.len()-1];
+                }
+                else
+                {
+                    tmp_bot_input[i as usize] = tmp_input[offset_counter_bottom as usize];
+                }
             }
+            println!("bot calc {} {:?}" , bot_size, tmp_bot_input);
             self.m_bot[0].set_inputs(tmp_bot_input);
-            //println!("bot calc {:?}", self.m_bot[0].m_inputs);
             self.m_bot[0].calculate_outputs();
+            println!("bot result {:?}" , self.m_bot[0].m_outputs);
         }
 
         // extraction of data from internal structures
@@ -217,7 +228,7 @@ impl ASWaksman
                 tmp_input[(i + top_size_out) as usize] = self.m_bot[0].m_outputs[i as usize];
             }
         }
-        println!("e: {:?} {:?} s:{}", tmp_input, self.m_inputs, self.m_size);
+        println!("e: {:?} t:{:?} b:{:?} s:{}", tmp_input, self.m_top[0].m_outputs,self.m_bot[0].m_outputs, self.m_size);
         // last gate check
         for i in 0..num_of_left_gates as usize
         {
@@ -287,8 +298,8 @@ impl ASWaksman
             {
                 for i in 0..bot_gate_size
                 {                   
-                    // let offset_count = (i + rounded_down_gates - 1 + top_gate_size) as usize;
-                    // bot_gates[i as usize] = _gates[offset_count];
+                    let offset_count = (i + rounded_down_gates - 1 + top_gate_size) as usize;
+                    bot_gates[i as usize] = _gates[offset_count];
                 }
             }
 
@@ -388,7 +399,7 @@ fn main()
         {
             count.push(j);
         }
-        let mut b = ASWaksman::new_internal(i,count, vec![0; i as usize], vec![false; ASWaksman::calculate_gate_size(i) as usize]);
+        let mut b = ASWaksman::new_internal(i,count, vec![0; i as usize], vec![true; ASWaksman::calculate_gate_size(i) as usize]);
         b.calculate_outputs();
         println!("{}", b.print());
     }
