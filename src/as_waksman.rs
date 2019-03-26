@@ -140,14 +140,16 @@ impl ASWaksman
         }
 
         // if im here, im at at least size 5.
-        // first pass
         let num_of_left_gates = self.m_size / 2;
-        let mut tmp_input = vec![0; self.m_size as usize];
+        let mut tmp_input = vec![0; self.m_size as usize];        
+
+        // copy to tmp
         for i in 0..self.m_size as usize
-        {           
+        {
             tmp_input[i] = self.m_inputs[i];
         }
-        println!("fp: {:?} {:?} s:{}", tmp_input, self.m_inputs, self.m_size);
+
+        println!("default: {:?} s:{}", self.m_inputs, self.m_size);
 
         // first gate check
         for i in 0..num_of_left_gates as usize
@@ -155,14 +157,55 @@ impl ASWaksman
             if self.m_gates[i] == true
             {
                 let tmp = tmp_input[i*2];
-                tmp_input[i*2] = tmp_input[i*2 +1 ];
-                tmp_input[i*2+1] = tmp;
+                tmp_input[i * 2] = tmp_input[i * 2 + 1];
+                tmp_input[i * 2 + 1] = tmp;
             }
         }
 
-        // todo:: re direct inputs
-
+        let mut tmp_input_top = vec![0; num_of_left_gates as usize];
+        let mut tmp_input_bot = vec![0; (self.m_size - num_of_left_gates) as usize];
+        let mut countleft = 0;
+        let mut countright = 0;
         println!("fg: {:?} {:?} s:{}", tmp_input, self.m_inputs, self.m_size);
+        
+        // spliting the inputs to top and bottom
+        for i in 0..self.m_size as usize
+        {
+            if i % 2 == 0 // counting from 0 is funny..
+            {
+                if i == (self.m_size - 1) as usize
+                {
+                                    tmp_input_bot[countright] = tmp_input[i];
+                countright += 1;
+                }
+                else
+                {
+                    tmp_input_top[countleft] = tmp_input[i];
+                    countleft += 1;
+                }  
+            }
+            else
+            {
+                tmp_input_bot[countright] = tmp_input[i];
+                countright += 1;
+            }
+        }
+
+        // copy back
+        for i in 0..self.m_size as usize
+        {
+            if i >= tmp_input_top.len()
+            {
+                tmp_input[i] = tmp_input_bot[i - tmp_input_top.len()];
+            }
+            else
+            {
+                tmp_input[i] = tmp_input_top[i];
+            }
+        }
+
+        println!("fs: {:?} {:?} s:{}", tmp_input, self.m_inputs, self.m_size);
+
         // send into recursive wakeman
         if self.m_top.len() != 0
         {
@@ -229,8 +272,53 @@ impl ASWaksman
             }
         }
         println!("e: {:?} t:{:?} b:{:?} s:{}", tmp_input, self.m_top[0].m_outputs,self.m_bot[0].m_outputs, self.m_size);
+
         // last gate check
-        for i in 0..num_of_left_gates as usize
+        let mut num_of_right_gates = self.m_size / 2;
+        if self.m_size % 2 == 0
+        {
+            num_of_right_gates -= 1
+        }
+
+        // spliting the inputs to top and bottom
+        countleft = 0;
+        countright = 0;
+        for i in 0..self.m_size as usize
+        {
+            if i % 2 == 0 // counting from 0 is funny..
+            {
+                if i == (self.m_size - 1) as usize
+                {
+                    tmp_input_bot[countright] = tmp_input[i];
+                    countright += 1;
+                }
+                else
+                {
+                    tmp_input_top[countleft] = tmp_input[i];
+                    countleft += 1;
+                }  
+            }
+            else
+            {
+                tmp_input_bot[countright] = tmp_input[i];
+                countright += 1;
+            }
+        }
+
+        // copy back
+        for i in 0..self.m_size as usize
+        {
+            if i >= tmp_input_top.len()
+            {
+                tmp_input[i] = tmp_input_bot[i - tmp_input_top.len()];
+            }
+            else
+            {
+                tmp_input[i] = tmp_input_top[i];
+            }
+        }
+
+        for i in 0..num_of_right_gates as usize
         {
             let counter_final_gate = (i as u32 + num_of_left_gates - 1) as usize;
             if self.m_gates[counter_final_gate] == true 
@@ -385,14 +473,14 @@ impl ASWaksman
 
     fn print(&self) -> String
     {
-        //return String::from(format!("ASWaksman: {} {:?} {:?}",self.m_size, self.m_inputs, self.m_outputs));
-        return String::from(format!("ASWaksman: {} {:?} {:?} {:?}",self.m_size, self.m_inputs, self.m_outputs, self.m_gates));
+        return String::from(format!("ASWaksman: {} {:?} {:?}",self.m_size, self.m_inputs, self.m_outputs));
+        //return String::from(format!("ASWaksman: {} {:?} {:?} {:?}",self.m_size, self.m_inputs, self.m_outputs, self.m_gates));
     }
 }
 
 fn main()
 {
-    for i in 5..6
+    for i in 5..7
     {
         let mut count = vec![];
         for j in 0..i
