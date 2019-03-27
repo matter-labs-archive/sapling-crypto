@@ -349,10 +349,10 @@ impl ASWaksman
 
     fn calculate_witness(self)-> Vec<bool>
     {
-        let maxCount = 2_u64.pow(self.m_gate_size); // this is max permutations to bruteforce
-        let failedPermuation = vec![];
-        let mut curPermuation = vec![false; self.m_gate_size as usize];
-        for j in 0..maxCount
+        let max_count = 2_u64.pow(self.m_gate_size); // this is max permutations to bruteforce
+        let failed_permuation = vec![];
+        let mut cur_permuation = vec![false; self.m_gate_size as usize];
+        for j in 0..max_count
         {
             // change the configuration to handle stuffs.
             for i in 0..self.m_gate_size as usize
@@ -361,38 +361,39 @@ impl ASWaksman
                 //println!("ci: {} {} {}", i,j, currentindex);
                 if currentindex != 0
                 {
-                    curPermuation[i] = true;
+                    cur_permuation[i] = true;
                 }
                 else
                 {
-                    curPermuation[i] = false;
+                    cur_permuation[i] = false;
                 }
             }
 
 
             // calculate a new permutation
-            let mut testASWaksman = ASWaksman::new_internal(self.m_size, self.m_inputs.clone(), self.m_outputs.clone(), curPermuation.clone());
-            testASWaksman.calculate_outputs();
+            let mut test_aswaksman = ASWaksman::new_internal(self.m_size, self.m_inputs.clone(), self.m_outputs.clone(), cur_permuation.clone());
+            test_aswaksman.calculate_outputs();
 
-            let mut isResultGood = true;
+            let mut is_result_good = true;
             for i in 0..self.m_size as usize
             {
-                if testASWaksman.m_outputs[i] != self.m_outputs[i]
+                if test_aswaksman.m_outputs[i] != self.m_outputs[i]
                 {
-                    isResultGood = false;
+                    is_result_good = false;
                     break;
                 }
             }
 
-            if (isResultGood)
+            if is_result_good
             {
-                return curPermuation;
+                return cur_permuation;
             }
         }
 
-        return failedPermuation;
+        return failed_permuation;
     }
 
+    #[allow(dead_code)]
     fn new(size: u32) -> ASWaksman
     {
         return ASWaksman::new_internal(size, vec![], vec![], vec![])
@@ -407,11 +408,10 @@ impl ASWaksman
 
         // recursive creation
         let top_size:u32 = size / 2;
-        let mut bot_size:u32;
-        if size % 2 == 0 {bot_size = top_size} else {bot_size = top_size + 1}
+        let mut bot_size:u32 = top_size + 1;
+        if size % 2 == 0 {bot_size = top_size}
         let rounded_down_gates:u32;
         if size % 2 == 0 {rounded_down_gates = size} else {rounded_down_gates = size - 1}
-        let left_over_gates = size - rounded_down_gates;
 
         // only split if its more than 4
         if size > 4
@@ -508,7 +508,7 @@ impl ASWaksman
                 bot.push(ASWaksman::new_internal(bot_size, bot_inputs, bot_outputs, bot_gates));
             }
         }
-        return ASWaksman
+        return ASWaksman 
         {
             m_top: top,
             m_bot: bot,
@@ -520,62 +520,10 @@ impl ASWaksman
         };
     }
 
+    #[allow(dead_code)]
     fn print(&self) -> String
     {
         return String::from(format!("ASWaksman: {} {:?} {:?}",self.m_size, self.m_inputs, self.m_outputs));
         //return String::from(format!("ASWaksman: {} {:?} {:?} {:?}",self.m_size, self.m_inputs, self.m_outputs, self.m_gates));
-    }
-}
-
-fn main()
-{
-    // // construction tests
-    // for i in 5..7
-    // {
-    //     let mut count = vec![];
-    //     for j in 0..i
-    //     {
-    //         count.push(j);
-    //     }
-    //     let mut b = ASWaksman::new_internal(i,count, vec![0; i as usize], vec![true; ASWaksman::calculate_gate_size(i) as usize]);
-    //     b.calculate_outputs();
-    //     println!("{}", b.print());
-    // }
-
-    // for i in 0..5
-    // {
-    //     let mut count = vec![];
-    //     for j in 0..i
-    //     {
-    //         count.push(j);
-    //     }
-    //     let mut b = ASWaksman::new_internal(i,count, vec![0; i as usize], vec![false; ASWaksman::calculate_gate_size(i) as usize]);
-    //     b.calculate_outputs();
-    //     println!("{}", b.print());
-    // }
-
-    // for i in 0..5
-    // {
-    //     let mut count = vec![];
-    //     for j in 0..i
-    //     {
-    //         count.push(j);
-    //     }
-    //     let mut b = ASWaksman::new_internal(i,count, vec![0; i as usize], vec![true; ASWaksman::calculate_gate_size(i) as usize]);
-    //     b.calculate_outputs();
-    //     println!("{}", b.print());
-    // }
-
-    // witness testings
-    for i in 4..5
-    {
-        let mut inputVector = vec![];
-        for j in 0..i
-        {
-            inputVector.push(j);
-        }
-        let mut b = ASWaksman::new_internal(i, inputVector, vec![2,1,3,0], vec![false; ASWaksman::calculate_gate_size(i) as usize]);
-        println!("{:?}", b.m_outputs);
-        println!("{:?}", b.calculate_witness());
     }
 }
