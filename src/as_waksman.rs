@@ -115,26 +115,36 @@ impl ASWaksman
                 self.m_outputs[2] = self.m_inputs[2];
                 self.m_outputs[3] = self.m_inputs[3];
             }
+            
+            // first flip top only line 1 and 2 are flipped
+            let tmp = self.m_outputs[1];
+            self.m_outputs[1] = self.m_outputs[2];
+            self.m_outputs[2] = tmp;
 
-            if self.m_gates[4] == true // middle gate
-            {
-                let tmp = self.m_outputs[1];
-                self.m_outputs[1] = self.m_outputs[2];
-                self.m_outputs[2] = tmp;
-            }
-
-            if self.m_gates[2] == true // end top gate
+            if self.m_gates[3] == true // middle top gate
             {
                 let tmp = self.m_outputs[0];
                 self.m_outputs[0] = self.m_outputs[1];
                 self.m_outputs[1] = tmp;
             }
 
-            if self.m_gates[3] == true // end bot gate
+            if self.m_gates[4] == true // middle bot gate
             {
                 let tmp = self.m_outputs[2];
                 self.m_outputs[2] = self.m_outputs[3];
                 self.m_outputs[3] = tmp;
+            }
+
+            // final flip top only line 1 and 2 are flipped
+            let tmp = self.m_outputs[1];
+            self.m_outputs[1] = self.m_outputs[2];
+            self.m_outputs[2] = tmp;
+
+            if self.m_gates[2] == true // end top gate
+            {
+                let tmp = self.m_outputs[0];
+                self.m_outputs[0] = self.m_outputs[1];
+                self.m_outputs[1] = tmp;
             }
             return;
         }
@@ -348,7 +358,7 @@ impl ASWaksman
             for i in 0..self.m_gate_size as usize
             {
                 let currentindex = j & (1 << i);
-                println!("ci: {} {} {}", i,j, currentindex);
+                //println!("ci: {} {} {}", i,j, currentindex);
                 if currentindex != 0
                 {
                     curPermuation[i] = true;
@@ -390,7 +400,7 @@ impl ASWaksman
 
     fn new_internal(size: u32, input: Vec<u32>, output: Vec<u32>, _gates: Vec<bool>) -> ASWaksman
     {
-        println!("start {}" , size);
+        //println!("start {}" , size);
         let gate_size = ASWaksman::calculate_gate_size(size);
         let mut top = vec![];
         let mut bot = vec![];
@@ -564,7 +574,7 @@ fn main()
         {
             inputVector.push(j);
         }
-        let mut b = ASWaksman::new_internal(i, inputVector, vec![3,1,2,0], vec![false; ASWaksman::calculate_gate_size(i) as usize]);
+        let mut b = ASWaksman::new_internal(i, inputVector, vec![2,1,3,0], vec![false; ASWaksman::calculate_gate_size(i) as usize]);
         println!("{:?}", b.m_outputs);
         println!("{:?}", b.calculate_witness());
     }
