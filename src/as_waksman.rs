@@ -149,7 +149,7 @@ impl ASWaksman
             return;
         }
 
-        // if im here, im at at least size 5.
+        // size is at least 5
         let num_of_left_gates = self.m_size / 2;
         let mut tmp_input = vec![0; self.m_size as usize];        
 
@@ -158,8 +158,6 @@ impl ASWaksman
         {
             tmp_input[i] = self.m_inputs[i];
         }
-
-        println!("default: {:?} s:{}", self.m_inputs, self.m_size);
 
         // first gate check
         for i in 0..num_of_left_gates as usize
@@ -175,9 +173,7 @@ impl ASWaksman
         let mut tmp_input_top = vec![0; num_of_left_gates as usize];
         let mut tmp_input_bot = vec![0; (self.m_size - num_of_left_gates) as usize];
         let mut countleft = 0;
-        let mut countright = 0;
-        println!("fg: {:?} {:?} s:{}", tmp_input, self.m_inputs, self.m_size);
-        
+        let mut countright = 0;       
         // spliting the inputs to top and bottom
         for i in 0..self.m_size as usize
         {
@@ -214,8 +210,6 @@ impl ASWaksman
             }
         }
 
-        println!("fs: {:?} {:?} s:{}", tmp_input, self.m_inputs, self.m_size);
-
         // send into recursive wakeman
         if self.m_top.len() != 0
         {
@@ -225,10 +219,8 @@ impl ASWaksman
             {
                 tmp_top_input[i as usize] = tmp_input[i as usize];
             }
-            println!("top calc {} {:?}" , top_size, tmp_top_input);
             self.m_top[0].set_inputs(tmp_top_input);
             self.m_top[0].calculate_outputs();
-            println!("top result {:?}" , self.m_top[0].m_outputs);
         }
 
         if self.m_bot.len() != 0
@@ -252,10 +244,8 @@ impl ASWaksman
                     tmp_bot_input[i as usize] = tmp_input[offset_counter_bottom as usize];
                 }
             }
-            println!("bot calc {} {:?}" , bot_size, tmp_bot_input);
             self.m_bot[0].set_inputs(tmp_bot_input);
             self.m_bot[0].calculate_outputs();
-            println!("bot result {:?}" , self.m_bot[0].m_outputs);
         }
 
         // extraction of data from internal structures
@@ -281,7 +271,6 @@ impl ASWaksman
                 tmp_input[(i + top_size_out) as usize] = self.m_bot[0].m_outputs[i as usize];
             }
         }
-        println!("e: {:?} t:{:?} b:{:?} s:{}", tmp_input, self.m_top[0].m_outputs,self.m_bot[0].m_outputs, self.m_size);
 
         // last gate check
         let mut num_of_right_gates = self.m_size / 2;
@@ -338,7 +327,7 @@ impl ASWaksman
                 tmp_input[i * 2 + 1] = right_gate_tmp;
             }
         }
-        println!("lg: {:?} {:?} s:{}", tmp_input, self.m_inputs, self.m_size);
+
         // copy to outputs
         for i in 0..self.m_size as usize
         {
@@ -358,7 +347,6 @@ impl ASWaksman
             for i in 0..self.m_gate_size as usize
             {
                 let currentindex = j & (1 << i);
-                //println!("ci: {} {} {}", i,j, currentindex);
                 if currentindex != 0
                 {
                     cur_permuation[i] = true;
@@ -401,7 +389,6 @@ impl ASWaksman
 
     fn new_internal(size: u32, input: Vec<u32>, output: Vec<u32>, _gates: Vec<bool>) -> ASWaksman
     {
-        //println!("start {}" , size);
         let gate_size = ASWaksman::calculate_gate_size(size);
         let mut top = vec![];
         let mut bot = vec![];
@@ -455,11 +442,9 @@ impl ASWaksman
             let mut bot_inputs = vec![0; bot_size as usize];
             if bot_size != 0
             {
-                //println!("botsize {}", bot_size);
                 for i in 0..bot_size
                 {
                     let offset_count = ((i*2) + 1) as usize; // -> 1,3,5,7 i
-                    //println!("oc:{} i:{} s:{} b_s:{}", offset_count , i, size, bot_size);
                     if offset_count >= (size as usize)
                     { 
                         bot_inputs[(bot_size - 1) as usize] = input[(offset_count - 1) as usize];
@@ -471,8 +456,6 @@ impl ASWaksman
                     
                 }
             }
-            println!("topinputs {:?}", top_inputs);
-            println!("botinputs {:?}", bot_inputs);
 
             // handle outputs
             // handle top half of aswakeman outputs
@@ -497,7 +480,7 @@ impl ASWaksman
                 }
             }
 
-            // reconstruct
+            // recursive construction
             if top_size > 1
             {
                 top.push(ASWaksman::new_internal(top_size, top_inputs, top_outputs, top_gates));
@@ -523,7 +506,6 @@ impl ASWaksman
     #[allow(dead_code)]
     fn print(&self) -> String
     {
-        return String::from(format!("ASWaksman: {} {:?} {:?}",self.m_size, self.m_inputs, self.m_outputs));
-        //return String::from(format!("ASWaksman: {} {:?} {:?} {:?}",self.m_size, self.m_inputs, self.m_outputs, self.m_gates));
+        return String::from(format!("ASWaksman: {} {:?} {:?} {:?}",self.m_size, self.m_inputs, self.m_outputs, self.m_gates));
     }
 }
