@@ -4,6 +4,8 @@
 use bellman::pairing::ff::{Field, PrimeField, PrimeFieldRepr};
 use rand::{Rng};
 use std::io::{self, Read, Write};
+use sha2::{Sha256, Digest};
+use hmac::{Hmac, Mac};
 
 use jubjub::{
     FixedGenerators, 
@@ -16,6 +18,8 @@ use jubjub::{
 use util::{hash_to_scalar, hash_to_scalar_s, sha256_hash_to_scalar};
 
 use ::constants::{MATTER_EDDSA_BLAKE2S_PERSONALIZATION};
+
+type HmacSha256 = Hmac<Sha256>;
 
 fn read_scalar<E: JubjubEngine, R: Read>(reader: R) -> io::Result<E::Fs> {
     let mut s_repr = <E::Fs as PrimeField>::Repr::default();
@@ -44,6 +48,73 @@ fn h_star_s<E: JubjubEngine>(a: &[u8], b: &[u8]) -> E::Fs {
 
 fn sha256_h_star<E: JubjubEngine>(a: &[u8], b: &[u8]) -> E::Fs {
     sha256_hash_to_scalar::<E>(&[], a, b)
+}
+
+#[derive(Clone)]
+pub struct Seed<E: JubjubEngine>(pub E::Fs);
+
+impl<E: JubjubEngine> Seed<E> {
+    pub fn random_seed<R: Rng>(rng: &mut R, msg: &[u8]) -> Self {
+        // T = (l_H + 128) bits of randomness
+        // For H*, l_H = 512 bits
+        let mut t = [0u8; 80];
+        rng.fill_bytes(&mut t[..]);
+
+        // Generate randomness using hash function based on some entropy and the message
+        // Generation of randommess is completely off-chain, so we use BLAKE2b!
+        // r = H*(T || M)
+        Seed(h_star::<E>(&t[..], msg))
+    }
+
+    pub fn deterministic_seed(pk: &PrivateKey<E>, msg: &[u8]) -> Self {
+        use std::slice;
+
+        let mut hasher = Sha256::new();
+        hasher.input(msg);
+
+        let zero = [0x00];
+        let mut v = [1u8; 32];
+        let mut key = [0u8; 32];
+
+        let mut mac = HmacSha256::new_varkey(&key).expect("HMAC can take key of any size");
+        
+        let mut concatenated: Vec<u8> = v.as_ref().to_vec();
+        concatenated.extend(zero.as_ref().to_vec().into_iter());
+        let priv_key = unsafe {
+            slice::from_raw_parts(
+                pk.0.into_repr()
+                .as_ref()
+                .to_vec().as_ptr() as *const u8, 32
+            )
+        };
+        concatenated.extend(priv_key.to_vec().into_iter());
+        concatenated.extend(hasher.result().as_slice().to_vec().into_iter());
+
+        mac.input(&concatenated[..]);
+        key.copy_from_slice(mac.clone().result().code().as_mut_slice());
+
+        mac.input(&v);
+        v.copy_from_slice(mac.clone().result().code().as_mut_slice());
+
+        let mut k = [0u8; 32];
+
+        loop {
+            let mut mac = HmacSha256::new_varkey(&key).expect("HMAC can take key of any size");
+            mac.input(&v);
+            k.copy_from_slice(mac.clone().result().code().as_mut_slice());
+
+            if E::Fs::to_uniform_32(&k).is_zero() {
+                let mut concatenated: Vec<u8> = v.as_ref().to_vec();
+                concatenated.extend(zero.as_ref().to_vec().into_iter());
+                mac.input(&concatenated[..]);
+                key.copy_from_slice(mac.clone().result().code().as_mut_slice());
+            } else {
+                break;
+            }
+        }
+
+        Seed(E::Fs::to_uniform_32(&k))
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -94,30 +165,20 @@ impl<E: JubjubEngine> PrivateKey<E> {
         write_scalar::<E, W>(&self.0, writer)
     }
 
-    pub fn sign_raw_message<R: Rng>(
+    pub fn sign_raw_message(
         &self,
         msg: &[u8],
-        rng: &mut R,
+        seed: &Seed<E>,
         p_g: FixedGenerators,
         params: &E::Params,
         max_message_size: usize,
     ) -> Signature<E> {
-        // T = (l_H + 128) bits of randomness
-        // For H*, l_H = 512 bits
-        let mut t = [0u8; 80];
-        rng.fill_bytes(&mut t[..]);
-
-        // Generate randomness using hash function based on some entropy and the message
-        // Generation of randommess is completely off-chain, so we use BLAKE2b!
-        // r = H*(T || M)
-        let r = h_star::<E>(&t[..], msg);
-
         let pk = PublicKey::from_private(&self, p_g, params);
         let order_check = pk.0.mul(E::Fs::char(), params);
         assert!(order_check.eq(&Point::zero()));
 
-        // R = r . P_G
-        let r_g = params.generator(p_g).mul(r, params);
+        // R = seed . P_G
+        let r_g = params.generator(p_g).mul(seed.0, params);
 
         // In a VERY LIMITED case of messages known to be unique due to application level
         // and being less than the group order when interpreted as integer, one can sign
@@ -133,11 +194,11 @@ impl<E: JubjubEngine> PrivateKey<E> {
             msg_padded.extend(&[0u8;1]);
         }
 
-        // S = r + M . sk
+        // S = seed + M . sk
         let mut s = E::Fs::to_uniform_32(msg_padded.as_ref());
         
         s.mul_assign(&self.0);
-        s.add_assign(&r);
+        s.add_assign(&seed.0);
     
         let as_unknown = Point::from(r_g);
         Signature { r: as_unknown, s: s }
@@ -145,23 +206,13 @@ impl<E: JubjubEngine> PrivateKey<E> {
 
 
     // This is a plain Schnorr signature that does not capture public key into the hash
-    pub fn sign_schnorr_blake2s<R: Rng>(
+    pub fn sign_schnorr_blake2s(
         &self,
         msg: &[u8],
-        rng: &mut R,
+        seed: &Seed<E>,
         p_g: FixedGenerators,
         params: &E::Params,
     ) -> Signature<E> {
-        // T = (l_H + 128) bits of randomness
-        // For H*, l_H = 512 bits
-        let mut t = [0u8; 80];
-        rng.fill_bytes(&mut t[..]);
-
-        // Generate randomness using hash function based on some entropy and the message
-        // Generation of randommess is completely off-chain, so we use BLAKE2b!
-        // r = H*(T || M)
-        let r = h_star::<E>(&t[..], msg);
-
         let pk = PublicKey::from_private(&self, p_g, params);
         let order_check = pk.0.mul(E::Fs::char(), params);
         assert!(order_check.eq(&Point::zero()));
@@ -171,8 +222,8 @@ impl<E: JubjubEngine> PrivateKey<E> {
         // so we use R_X || M as an input to hash only (without public key component),
         // with a point coordinate padded to 256 bits
 
-        // R = r . P_G
-        let r_g = params.generator(p_g).mul(r, params);
+        // R = seed . P_G
+        let r_g = params.generator(p_g).mul(seed.0, params);
 
         let (r_g_x, _) = r_g.into_xy();
         let mut r_g_x_bytes = [0u8; 32];
@@ -185,10 +236,10 @@ impl<E: JubjubEngine> PrivateKey<E> {
         let mut msg_padded : Vec<u8> = msg.iter().cloned().collect();
         msg_padded.resize(32, 0u8);
 
-        // S = r + H*(R_X || M) . sk
+        // S = seed + H*(R_X || M) . sk
         let mut s = h_star_s::<E>(&concatenated[..], &msg_padded[..]);
         s.mul_assign(&self.0);
-        s.add_assign(&r);
+        s.add_assign(&seed.0);
     
         let as_unknown = Point::from(r_g);
         Signature { r: as_unknown, s: s }
@@ -196,23 +247,13 @@ impl<E: JubjubEngine> PrivateKey<E> {
 
     // sign a message by following MuSig protocol, with public key being just a trivial key,
     // not a multisignature one
-    pub fn musig_sha256_sign<R: Rng>(
+    pub fn musig_sha256_sign(
         &self,
         msg: &[u8],
-        rng: &mut R,
+        seed: &Seed<E>,
         p_g: FixedGenerators,
         params: &E::Params,
     ) -> Signature<E> {
-        // T = (l_H + 128) bits of randomness
-        // For H*, l_H = 512 bits
-        let mut t = [0u8; 80];
-        rng.fill_bytes(&mut t[..]);
-
-        // Generate randomness using hash function based on some entropy and the message
-        // Generation of randommess is completely off-chain, so we use BLAKE2b!
-        // r = H*(T || M)
-        let r = h_star::<E>(&t[..], msg);
-
         let pk = PublicKey::from_private(&self, p_g, params);
         let order_check = pk.0.mul(E::Fs::char(), params);
         assert!(order_check.eq(&Point::zero()));
@@ -226,8 +267,8 @@ impl<E: JubjubEngine> PrivateKey<E> {
         // so we use PK_X || R_X || M as an input to hash,
         // with a point coordinates padded to 256 bits
 
-        // R = r . P_G
-        let r_g = params.generator(p_g).mul(r, params);
+        // R = seed . P_G
+        let r_g = params.generator(p_g).mul(seed.0, params);
 
         let (r_g_x, _) = r_g.into_xy();
         let mut r_g_x_bytes = [0u8; 32];
@@ -241,32 +282,22 @@ impl<E: JubjubEngine> PrivateKey<E> {
         let mut msg_padded : Vec<u8> = msg.iter().cloned().collect();
         msg_padded.resize(32, 0u8);
 
-        // S = r + H*(PK_X || R_X || M) . sk
+        // S = seed + H*(PK_X || R_X || M) . sk
         let mut s = sha256_h_star::<E>(&concatenated[..], &msg_padded[..]);
         s.mul_assign(&self.0);
-        s.add_assign(&r);
+        s.add_assign(&seed.0);
     
         let as_unknown = Point::from(r_g);
         Signature { r: as_unknown, s: s }
     }
 
-    pub fn sign<R: Rng>(
+    pub fn sign(
         &self,
         msg: &[u8],
-        rng: &mut R,
+        seed: &Seed<E>,
         p_g: FixedGenerators,
         params: &E::Params,
     ) -> Signature<E> {
-        // T = (l_H + 128) bits of randomness
-        // For H*, l_H = 512 bits
-        let mut t = [0u8; 80];
-        rng.fill_bytes(&mut t[..]);
-
-        // Generate randomness using hash function based on some entropy and the message
-        // Generation of randommess is completely off-chain, so we use BLAKE2b!
-        // r = H*(T || M)
-        let r = h_star::<E>(&t[..], msg);
-
         let pk = PublicKey::from_private(&self, p_g, params);
         let order_check = pk.0.mul(E::Fs::char(), params);
         assert!(order_check.eq(&Point::zero()));
@@ -275,8 +306,8 @@ impl<E: JubjubEngine> PrivateKey<E> {
         // BLAKE2s has 512 of input and 256 bits of output,
         // so we use R_X || M as an input to hash only (without public key component), with point coordinates badded to 
 
-        // R = r . P_G
-        let r_g = params.generator(p_g).mul(r, params);
+        // R = seed . P_G
+        let r_g = params.generator(p_g).mul(seed.0, params);
 
         let (r_g_x, r_g_y) = r_g.into_xy();
         let mut r_g_x_bytes = [0u8; 32];
@@ -297,7 +328,7 @@ impl<E: JubjubEngine> PrivateKey<E> {
         // S = r + H*(Rbar || Pk || M) . sk
         let mut s = h_star::<E>(&concatenated[..], msg);
         s.mul_assign(&self.0);
-        s.add_assign(&r);
+        s.add_assign(&seed.0);
     
         let as_unknown = Point::from(r_g);
         Signature { r: as_unknown, s: s }
@@ -561,6 +592,25 @@ mod baby_tests {
     use super::*;
 
     #[test]
+    fn deterministic_seed() {
+        let rng = &mut thread_rng();
+        let msg = b"Foo bar";
+        let seed1 = Seed::<Bn256>::random_seed(rng, msg);
+        let seed2 = Seed::<Bn256>::random_seed(rng, msg);
+        assert_ne!(seed1.0, seed2.0);
+    }
+
+    #[test]
+    fn random_seed() {
+        let rng = &mut thread_rng();
+        let msg = b"Foo bar";
+        let sk = PrivateKey::<Bn256>(rng.gen());
+        let seed1 = Seed::deterministic_seed(&sk, msg);
+        let seed2 = Seed::deterministic_seed(&sk, msg);
+        assert_eq!(seed1.0, seed2.0);
+    }
+
+    #[test]
     fn cofactor_check() {
         let rng = &mut thread_rng();
         let params = &AltJubjubBn256::new();
@@ -584,7 +634,8 @@ mod baby_tests {
         let vk = PublicKey::from_private(&sk, p_g, params);
 
         let msg = b"Foo bar";
-        let sig = sk.sign(msg, rng, p_g, params);
+        let seed = Seed::random_seed(rng, msg);
+        let sig = sk.sign(msg, &seed, p_g, params);
         assert!(vk.verify(msg, &sig, p_g, params));
 
         // in contrast to redjubjub, in this implementation out-of-group R is NOT allowed!
@@ -638,8 +689,11 @@ mod baby_tests {
             let msg1 = b"Foo bar";
             let msg2 = b"Spam eggs";
 
-            let sig1 = sk.sign(msg1, rng, p_g, params);
-            let sig2 = sk.sign(msg2, rng, p_g, params);
+            let seed1 = Seed::random_seed(rng, msg1);
+            let seed2 = Seed::random_seed(rng, msg2);
+
+            let sig1 = sk.sign(msg1, &seed1, p_g, params);
+            let sig2 = sk.sign(msg2, &seed2, p_g, params);
 
             assert!(vk.verify(msg1, &sig1, p_g, params));
             assert!(vk.verify(msg2, &sig2, p_g, params));
@@ -650,8 +704,8 @@ mod baby_tests {
             let rsk = sk.randomize(alpha);
             let rvk = vk.randomize(alpha, p_g, params);
 
-            let sig1 = rsk.sign(msg1, rng, p_g, params);
-            let sig2 = rsk.sign(msg2, rng, p_g, params);
+            let sig1 = rsk.sign(msg1, &seed1, p_g, params);
+            let sig2 = rsk.sign(msg2, &seed2, p_g, params);
 
             assert!(rvk.verify(msg1, &sig1, p_g, params));
             assert!(rvk.verify(msg2, &sig2, p_g, params));
@@ -673,8 +727,11 @@ mod baby_tests {
             let msg1 = b"Foo bar";
             let msg2 = b"Spam eggs";
 
-            let sig1 = sk.sign_schnorr_blake2s(msg1, rng, p_g, params);
-            let sig2 = sk.sign_schnorr_blake2s(msg2, rng, p_g, params);
+            let seed1 = Seed::random_seed(rng, msg1);
+            let seed2 = Seed::random_seed(rng, msg2);
+
+            let sig1 = sk.sign_schnorr_blake2s(msg1, &seed1, p_g, params);
+            let sig2 = sk.sign_schnorr_blake2s(msg2, &seed2, p_g, params);
 
             assert!(vk.verify_schnorr_blake2s(msg1, &sig1, p_g, params));
             assert!(vk.verify_schnorr_blake2s(msg2, &sig2, p_g, params));
@@ -685,8 +742,8 @@ mod baby_tests {
             let rsk = sk.randomize(alpha);
             let rvk = vk.randomize(alpha, p_g, params);
 
-            let sig1 = rsk.sign_schnorr_blake2s(msg1, rng, p_g, params);
-            let sig2 = rsk.sign_schnorr_blake2s(msg2, rng, p_g, params);
+            let sig1 = rsk.sign_schnorr_blake2s(msg1, &seed1, p_g, params);
+            let sig2 = rsk.sign_schnorr_blake2s(msg2, &seed2, p_g, params);
 
             assert!(rvk.verify_schnorr_blake2s(msg1, &sig1, p_g, params));
             assert!(rvk.verify_schnorr_blake2s(msg2, &sig2, p_g, params));
@@ -710,8 +767,11 @@ mod baby_tests {
 
             let max_message_size: usize = 16;
 
-            let sig1 = sk.sign_raw_message(msg1, rng, p_g, params, max_message_size);
-            let sig2 = sk.sign_raw_message(msg2, rng, p_g, params, max_message_size);
+            let seed1 = Seed::random_seed(rng, msg1);
+            let seed2 = Seed::random_seed(rng, msg2);
+
+            let sig1 = sk.sign_raw_message(msg1, &seed1, p_g, params, max_message_size);
+            let sig2 = sk.sign_raw_message(msg2, &seed2, p_g, params, max_message_size);
 
             assert!(vk.verify_for_raw_message(msg1, &sig1, p_g, params, max_message_size));
             assert!(vk.verify_for_raw_message(msg2, &sig2, p_g, params, max_message_size));
@@ -722,8 +782,8 @@ mod baby_tests {
             let rsk = sk.randomize(alpha);
             let rvk = vk.randomize(alpha, p_g, params);
 
-            let sig1 = rsk.sign_raw_message(msg1, rng, p_g, params, max_message_size);
-            let sig2 = rsk.sign_raw_message(msg2, rng, p_g, params, max_message_size);
+            let sig1 = rsk.sign_raw_message(msg1, &seed1, p_g, params, max_message_size);
+            let sig2 = rsk.sign_raw_message(msg2, &seed2, p_g, params, max_message_size);
 
             assert!(rvk.verify_for_raw_message(msg1, &sig1, p_g, params, max_message_size));
             assert!(rvk.verify_for_raw_message(msg2, &sig2, p_g, params, max_message_size));
@@ -747,8 +807,11 @@ mod baby_tests {
 
             let max_message_size: usize = 16;
 
-            let sig1 = sk.musig_sha256_sign(msg1, rng, p_g, params);
-            let sig2 = sk.musig_sha256_sign(msg2, rng, p_g, params);
+            let seed1 = Seed::random_seed(rng, msg1);
+            let seed2 = Seed::random_seed(rng, msg2);
+
+            let sig1 = sk.musig_sha256_sign(msg1, &seed1, p_g, params);
+            let sig2 = sk.musig_sha256_sign(msg2, &seed2, p_g, params);
 
             assert!(vk.verify_musig_sha256(msg1, &sig1, p_g, params));
             assert!(vk.verify_musig_sha256(msg2, &sig2, p_g, params));
@@ -759,8 +822,8 @@ mod baby_tests {
             let rsk = sk.randomize(alpha);
             let rvk = vk.randomize(alpha, p_g, params);
 
-            let sig1 = rsk.musig_sha256_sign(msg1, rng, p_g, params);
-            let sig2 = rsk.musig_sha256_sign(msg2, rng, p_g, params);
+            let sig1 = rsk.musig_sha256_sign(msg1, &seed1, p_g, params);
+            let sig2 = rsk.musig_sha256_sign(msg2, &seed2, p_g, params);
 
             assert!(rvk.verify_musig_sha256(msg1, &sig1, p_g, params));
             assert!(rvk.verify_musig_sha256(msg2, &sig2, p_g, params));

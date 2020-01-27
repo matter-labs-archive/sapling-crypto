@@ -26,6 +26,7 @@ tiny-keccak = {version = "2.0", features = ["keccak"] }
 serde = "1.0"
 serde_derive = "1.0"
 sha2 = "0.8.0"
+hmac = "0.7.1"
 
 #bellman = {package = "bellman_ce", path = "../bellman"}
 bellman = {package = "bellman_ce", version = "0.3", default-features = false}

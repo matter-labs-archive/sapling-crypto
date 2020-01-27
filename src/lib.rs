@@ -9,6 +9,7 @@ extern crate rand;
 extern crate byteorder;
 extern crate tiny_keccak;
 extern crate sha2;
+extern crate hmac;
 
 #[cfg(test)]
 #[macro_use]
