@@ -1,3 +1,6 @@
+use fnv::FnvHashMap;
+use std::default::Default;
+
 use bellman::pairing::{
     Engine,
 };
@@ -779,27 +782,24 @@ impl<E: Engine> Num<E> {
         self.value = newval;
         let mut lc = LinearCombination::zero();
         // std::mem::swap(&mut self.lc, &mut lc);
-        use std::collections::HashMap;
-        let mut final_coeffs: HashMap<bellman::Variable, E::Fr> = HashMap::new();
+        let mut final_coeffs = FnvHashMap::<Variable, E::Fr>::with_capacity_and_hasher(
+            self.lc.as_ref().len() + other.lc.as_ref().len(),
+            Default::default(),
+        );
         for (var, coeff) in self.lc.as_ref() {
-            if final_coeffs.get(var).is_some() {
-                if let Some(existing_coeff) = final_coeffs.get_mut(var) {
-                    existing_coeff.add_assign(&coeff);
-                } 
-            } else {
-                final_coeffs.insert(*var, *coeff);
-            }
+            final_coeffs
+                .entry(*var)
+                .and_modify(|c| c.add_assign(coeff))
+                .or_insert_with(|| *coeff);
         }
 
         for (var, coeff) in other.lc.as_ref() {
-            if final_coeffs.get(var).is_some() {
-                if let Some(existing_coeff) = final_coeffs.get_mut(var) {
-                    existing_coeff.add_assign(&coeff);
-                }
-            } else {
-                final_coeffs.insert(*var, *coeff);
-            }
+            final_coeffs
+                .entry(*var)
+                .and_modify(|c| c.add_assign(coeff))
+                .or_insert_with(|| *coeff);
         }
+
         for (var, coeff) in final_coeffs.into_iter() {
             lc = lc + (coeff, var);
         }

@@ -21,6 +21,7 @@ wasm = ["bellman/wasm"]
 [dependencies]
 rand = "0.4"
 digest = "0.8"
+fnv = "1.0.3"
 byteorder = "1"
 tiny-keccak = {version = "2.0", features = ["keccak"] }
 serde = "1.0"
