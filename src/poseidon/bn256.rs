@@ -20,7 +20,7 @@ impl Bn256PoseidonParams {
     pub fn new<H: GroupHasher>() -> Self {
         let t = 6u32;
         let r_f = 8u32;
-        let r_p = 84u32;
+        let r_p = 57u32;
         let security_level = 126u32;
 
         Self::new_for_params::<H>(t, r_f, r_p, security_level)

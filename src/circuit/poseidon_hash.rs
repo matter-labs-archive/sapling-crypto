@@ -262,6 +262,7 @@ fn poseidon_mimc_round<E: PoseidonEngine<SBox = QuinticSBox<E> >, CS>(
     let r_f = params.r_f();
     let r_p = params.r_p();
     let t = params.t();
+    let pre_full_rounds = r_f - r_f / 2;
 
     fn add_round_constants<E: PoseidonEngine, CS>(
         params: &E::Params,
@@ -286,7 +287,7 @@ fn poseidon_mimc_round<E: PoseidonEngine<SBox = QuinticSBox<E> >, CS>(
 
     // do releated applications of MDS and then round constants and s-boxes
 
-    for full_round in 0..(r_f-1) {
+    for full_round in 0..(pre_full_rounds - 1) {
         let s_box_applied = E::SBox::apply_sbox(
             cs.namespace(|| format!("apply s-box for full round {}", full_round)),
             &state[..]
@@ -316,7 +317,7 @@ fn poseidon_mimc_round<E: PoseidonEngine<SBox = QuinticSBox<E> >, CS>(
     // transformation and add first round constants before going through partial rounds
     {
         let s_box_applied = E::SBox::apply_sbox(
-            cs.namespace(|| format!("apply s-box for full round {}", r_f-1)),
+            cs.namespace(|| format!("apply s-box for full round {}", pre_full_rounds-1)),
             &state[..]
         )?;
 
@@ -376,13 +377,13 @@ fn poseidon_mimc_round<E: PoseidonEngine<SBox = QuinticSBox<E> >, CS>(
             linear_transformation_results.push(linear_applied);
         }
 
-        add_round_constants::<E, CS>(params, &mut linear_transformation_results[..], r_f, true);
+        add_round_constants::<E, CS>(params, &mut linear_transformation_results[..], pre_full_rounds, true);
         state = linear_transformation_results;
 
         round += 1;
     }
 
-    for full_round in r_f..(2*r_f - 1) {
+    for full_round in pre_full_rounds..(r_f - 1) {
         let s_box_applied = E::SBox::apply_sbox(
             cs.namespace(|| format!("apply s-box for full round {}", full_round)),
             &state[..]
@@ -403,9 +404,10 @@ fn poseidon_mimc_round<E: PoseidonEngine<SBox = QuinticSBox<E> >, CS>(
     }
 
     // for a final round we only apply s-box
+    let full_round = r_f - 1;
 
     let state = E::SBox::apply_sbox(
-            cs.namespace(|| format!("apply s-box for full round {}", 2*r_f - 1)),
+            cs.namespace(|| format!("apply s-box for full round {}", full_round)),
             &state[..]
         )?;
 
