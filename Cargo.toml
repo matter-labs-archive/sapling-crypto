@@ -28,7 +28,8 @@ serde_derive = "1.0"
 sha2 = "0.8.0"
 
 #bellman = {package = "bellman_ce", path = "../bellman"}
-bellman = {package = "bellman_ce", version = "0.3", default-features = false}
+bellman = { package = "bellman_ce", git = "https://github.com/matter-labs/bellman.git", branch = "recursive_plonk" }
+#bellman = {package = "bellman_ce", version = "0.3", default-features = false}
 blake2-rfc_bellman_edition = "0.0.1"
 
 [dev-dependencies]

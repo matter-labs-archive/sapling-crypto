@@ -635,6 +635,7 @@ impl<E: Engine> Clone for Num<E> {
     }
 }
 
+
 impl<E: Engine> Num<E> {
     pub fn zero() -> Self {
         Num {
@@ -643,8 +644,19 @@ impl<E: Engine> Num<E> {
         }
     }
 
+    pub fn from_constant<CS: ConstraintSystem<E>>(c: &E::Fr, cs: &CS) -> Self {
+        Num {
+            value: Some(c.clone()),
+            lc: LinearCombination::zero() + (c.clone(), CS::one())
+        }
+    }
+
     pub fn get_value(&self) -> Option<E::Fr> {
         self.value
+    }
+
+    pub dn get_lc(&self) -> &LinearCombination<E> {
+        &self.lc
     }
 
     pub fn lc(&self, coeff: E::Fr) -> LinearCombination<E> {
@@ -805,7 +817,9 @@ impl<E: Engine> Num<E> {
         }
         self.lc = lc;
     }
+
 }
+
 
 #[cfg(test)]
 mod test {
