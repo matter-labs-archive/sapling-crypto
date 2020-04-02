@@ -212,6 +212,91 @@ impl<E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> RescueGadget<E, RP
 }
 
 
+#[cfg(test)]
+mod test {
+    use super::*;
+    use bellman::Circuit;
+    use bellman::redshift::IOP::hashes::rescue::{Rescue, RescueParams};
+    use bellman::redshift::IOP::hashes::rescue::bn256_rescue_params::BN256Rescue;
+
+    use bellman::pairing::bn256::Fr as Fr;
+    use bellman::pairing::bn256::Bn256;
+
+    use super::super::bn256_rescue_sbox::BN256RescueSbox;
+    use crate::circuit::test::TestConstraintSystem;
+
+    #[test]
+    fn test_rescue_gadget() {
+        struct TestCircuit<E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> {
+            params: RP,
+            sbox: SBOX,
+            inputs: Vec<E::Fr>,
+            expected_outputs: Vec<E::Fr>,
+        }
+
+        impl<E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> Circuit<E> for TestCircuit<E, RP, SBOX> {
+            fn synthesize<CS: ConstraintSystem<E>>(
+                self,
+                cs: &mut CS,
+            ) -> Result<(), SynthesisError> {
+
+                let mut g = RescueGadget::<E, RP, SBOX>::new(&self.params);
+
+                assert!(self.inputs.len() <= self.params.r());
+                assert!(self.expected_outputs.len() <= self.params.c());
+
+                for elem in self.inputs.into_iter() {
+                    let val = AllocatedNum::alloc(cs.namespace(|| "rescue test input"), || Ok(elem))?;
+                    g.absorb(val.into(),  cs.namespace(|| "absorb input"), &self.params)?;
+                }
+
+                for elem in self.expected_outputs.into_iter() {
+                    let val = AllocatedNum::alloc_input(cs.namespace(|| "rescue output"), || Ok(elem))?;
+                    let s = g.squeeze(cs.namespace(|| "squeeze s"), &self.params)?;
+                    cs.enforce(
+                        || "check output", 
+                        |lc| lc + s.get_lc(), 
+                        |lc| lc + CS::one(),
+                        |lc| lc + val.get_variable(),
+                    );
+                }
+
+                Ok(())
+            }
+        }
+
+        let bn256_rescue_params = BN256Rescue::default();
+        let mut r = Rescue::new(&bn256_rescue_params);
+
+        // construct 3 and 9 as inputs
+        let mut a = Fr::one();
+        a.double();
+        a.add_assign(&Fr::one());
+
+        let mut b = a.clone();
+        b.double();
+
+        let inputs = vec![a, b]; 
+
+        r.absorb(a, &bn256_rescue_params);
+        r.absorb(b, &bn256_rescue_params);
+
+        let expected_s = r.squeeze(&bn256_rescue_params);
+
+        let test_circuit = TestCircuit::<Bn256, BN256Rescue, BN256RescueSbox> {
+            params: bn256_rescue_params,
+            sbox: BN256RescueSbox{},
+            inputs: inputs,
+            expected_outputs: vec![expected_s],
+        };
+
+        let mut cs = TestConstraintSystem::<Bn256>::new();
+        test_circuit.synthesize(&mut cs).expect("should synthesize");
+
+        assert!(cs.is_satisfied());
+    }    
+}
+
 
 
 

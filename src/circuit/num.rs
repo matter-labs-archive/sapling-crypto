@@ -63,6 +63,28 @@ impl<E: Engine> AllocatedNum<E> {
         })
     }
 
+    pub fn alloc_input<CS, F>(
+        mut cs: CS,
+        value: F,
+    ) -> Result<Self, SynthesisError>
+        where CS: ConstraintSystem<E>,
+              F: FnOnce() -> Result<E::Fr, SynthesisError>
+    {
+        let mut new_value = None;
+        let var = cs.alloc_input(|| "num", || {
+            let tmp = value()?;
+
+            new_value = Some(tmp);
+
+            Ok(tmp)
+        })?;
+
+        Ok(AllocatedNum {
+            value: new_value,
+            variable: var
+        })
+    }
+
     pub fn inputize<CS>(
         &self,
         mut cs: CS
@@ -655,7 +677,7 @@ impl<E: Engine> Num<E> {
         self.value
     }
 
-    pub dn get_lc(&self) -> &LinearCombination<E> {
+    pub fn get_lc(&self) -> &LinearCombination<E> {
         &self.lc
     }
 
