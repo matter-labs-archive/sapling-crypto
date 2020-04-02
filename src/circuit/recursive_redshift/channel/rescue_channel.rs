@@ -1,5 +1,5 @@
 use super::*;
-use crate::circuit::recursive_redshift::rescue::{RescueGadget, RescueSbox};
+use crate::circuit::recursive_redshift::hashes::rescue::{RescueGadget, RescueSbox};
 
 use bellman::redshift::IOP::hashes::rescue::{Rescue, RescueParams};
 
