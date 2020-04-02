@@ -20,7 +20,8 @@ use bellman::{
 
 use crate::circuit::num::*;
 
-pub trait RescueSbox<E: Engine> {
+
+pub trait RescueSbox<E: Engine>: Clone + Copy {
 
     fn rescue_alpha<CS : ConstraintSystem<E>>(elem: &Num<E>, cs: CS) -> Result<Num<E>, SynthesisError>;
 
@@ -294,6 +295,8 @@ mod test {
         test_circuit.synthesize(&mut cs).expect("should synthesize");
 
         assert!(cs.is_satisfied());
+
+        println!("Rescue 2->1 with 22 rounds requires {} constraints", cs.num_constraints());
     }    
 }
 

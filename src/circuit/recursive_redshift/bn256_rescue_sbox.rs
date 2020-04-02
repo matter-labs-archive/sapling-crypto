@@ -22,7 +22,8 @@ use bellman::pairing::bn256::Bn256 as E;
 use bellman::pairing::bn256::Fr as Fr;
 
 
-struct BN256RescueSbox;
+#[derive(Clone, Copy)]
+pub struct BN256RescueSbox;
 
 impl BN256RescueSbox {
 

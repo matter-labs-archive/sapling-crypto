@@ -1,96 +1,108 @@
-use super::rescue_gadget::*;
+#![allow(non_snake_case)]
 
-use crate::pairing::ff::{Field, PrimeField, PrimeFieldRepr};
-use crate::pairing::{Engine};
-use super::common::*;
-use crate::cs::*;
+use bellman::redshift::IOP::hashes::rescue::{RescueParams};
+
+use bellman::pairing::{
+    Engine,
+};
+
+use bellman::pairing::ff::{
+    Field,
+    PrimeField,
+};
+
+use bellman::{
+    SynthesisError,
+    ConstraintSystem,
+    LinearCombination,
+    Variable
+};
 use std::marker::PhantomData;
 
-pub struct RescueTreeGadget<E: Engine> {
-    _marker: PhantomData<E>,
+use crate::circuit::num::*;
+use crate::circuit::boolean::*;
+use super::rescue::*;
+
+
+pub struct RescueTreeGadget<'a, E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> {
     root: AllocatedNum<E>,
+    size: usize,
     height: usize,
-    hash_gadget: RescueGadget<E: Engine>,
+    num_elems_per_leaf: usize,
+    params: &'a RP,
+    sbox: SBOX,
 }
 
-impl<E: Engine> RescueTreeGadget<E> {
+impl<'a, E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> RescueTreeGadget<'a, E, RP, SBOX> {
 
-    fn new(root: AllocatedNum<E>, height: usize) -> Self {
+    fn log2_floor(num: usize) -> usize {
+        assert!(num > 0);
+        let mut pow: usize = 0;
+
+        while (1 << (pow+1)) <= num {
+            pow += 1;
+        }
+        pow
+    }
+
+    pub fn new(root: AllocatedNum<E>, size: usize, num_elems_per_leaf: usize, params: &'a RP, sbox: SBOX) -> Self {
+        assert!(size.is_power_of_two());
+        let height = Self::log2_floor(size);
+
         Self {
-            root: root.clone(),
+            root,
+            size,
             height,
-            _marker: PhantomData::<E>,
+            num_elems_per_leaf,
+            params,
+            sbox,
         }
     }
 
-    fn hash_elems_into_leaf<CS: ConstraintSystem<E>>(&self, cs: &mut CS, elems: &[Num<E>]) -> Num<E> {
-
-        let mut hasher = RescueTreeGadget.clone();
-        for elem in elems {
-            hasher.absorb();
-        }
-
-        let output = hasher.squeeze();
-        Ok(node_hash)
-    }
-
-    fn check_proof<CS: ConstraintSystem>(&self, cs: &mut CS)leaf: &[Boolean], it is first index as a num  path: &[Boolean], witness: &[Self::Hash]) -> Result<Boolean, SynthesisError>; {
+    fn hash_elems_into_leaf<CS>(&self, mut cs: CS, elems: &[Num<E>]) -> Result<Num<E>, SynthesisError> 
+    where CS: ConstraintSystem<E> {
+        assert_eq!(elems.len(), self.num_elems_per_leaf);
         
+        let mut hasher = RescueGadget::<E, RP, SBOX>::new(self.params);
+        for elem in elems {
+            hasher.absorb(elem.clone(), cs.namespace(|| "hashing into leaf: absorbing"), &self.params)?;
+        }
+
+        let output = hasher.squeeze(cs.namespace(|| "hashing into leaf: squeezing"), &self.params)?;
+        Ok(output)
     }
 
-        // checks inclusion of the leaf hash into the root
-    fn check_hash_inclusion_for_root<CS: ConstraintSystem<E>>(
+    fn hash_node<CS>(&self, mut cs: CS, left: AllocatedNum<E>, right: AllocatedNum<E>) -> Result<AllocatedNum<E>, SynthesisError> 
+    where CS : ConstraintSystem<E> {
+
+        let mut hasher = RescueGadget::<E, RP, SBOX>::new(self.params);
+
+        hasher.absorb(left.into(), cs.namespace(|| "hashing inside Merklee tree: absorbing"), &self.params)?;
+        hasher.absorb(right.into(), cs.namespace(|| "hashing inside Merklee tree: absorbing"), &self.params)?;
+
+        let mut output = hasher.squeeze(cs.namespace(|| "hashing inside Merklee tree: squeezing"), &self.params)?;
+
+        let otput_var = output.simplify(cs.namespace(|| "simplification"))?; 
+        
+        Ok(otput_var)
+    }
+
+    // checks inclusion of the leaf hash into the root
+    fn check_hash_inclusion_with_parsed_path<CS: ConstraintSystem<E>>(
         &self, 
         mut cs: CS, 
-        root: &Self::Hash,
-        hash: &Self::Hash, 
-        path: &[Boolean], 
-        witness: &[Self::Hash]
+        leaf_hash : AllocatedNum<E>,
+        path: Vec<Boolean>, 
+        witness: &[AllocatedNum<E>]
     ) -> Result<Boolean, SynthesisError> {
         if self.height != witness.len() {
             return Err(SynthesisError::Unsatisfiable);
         }
 
-        if from_path_bits.len() != to_path_bits.len() {
-        return Err(SynthesisError::Unsatisfiable);
-    }
-    // Intersection point is the only element required in outside scope
-    let mut intersection_point_lc = Num::<E>::zero();
-
-    let mut bitmap_path_from: Vec<Boolean> = from_path_bits.to_vec();
-    bitmap_path_from.reverse();
-    
-    let mut bitmap_path_to: Vec<Boolean> = to_path_bits.to_vec();
-    bitmap_path_to.reverse();
-
-
-     // common prefix is reversed because it's enumerated from the root, while
-    // audit path is from the leafs
-
-    let mut common_prefix_reversed = common_prefix.clone();
-    common_prefix_reversed.reverse();
-
-    // Common prefix is found, not we enforce equality of 
-    // audit path elements on a common prefix
-
-    for (i, bitmask_bit) in common_prefix_reversed.into_iter().enumerate()
-    {
-        let path_element_from = &audit_path_from[i];
-        let path_element_to = &audit_path_to[i];
-
-        cs.enforce(
-            || format!("enforce audit path equality for {}", i),
-            |lc| lc + path_element_from.get_variable() - path_element_to.get_variable(),
-            |_| bitmask_bit.lc(CS::one(), E::Fr::one()),
-            |lc| lc
-        );
-        
-        // This is an injective encoding, as cur is a
-        // point in the prime order subgroup.
-        let mut cur = hash.clone();
+        let mut cur = leaf_hash;
 
         // Ascend the merkle tree authentication path
-        for (i, direction_bit) in path.clone().into_iter()
+        for (i, direction_bit) in path.into_iter()
                                         .enumerate() {
             let cs = &mut cs.namespace(|| format!("merkle tree hash {}", i));
 
@@ -111,336 +123,184 @@ impl<E: Engine> RescueTreeGadget<E> {
 
             cur = self.hash_node(
                 cs.namespace(|| "node hash computation"), 
-                &[xl, xr], 
-                i
+                xl,
+                xr
             )?;
         }
 
         let included = AllocatedNum::equals(
             cs.namespace(|| "compare roots"), 
             &cur, 
-            &root
+            &self.root
         )?;
 
         Ok(included)
     }
 
-
-}
-
-
-
-
-
-
-
-    
-    // checks inclusion of the leaf into the root
-    fn check_inclusion_for_root<CS: ConstraintSystem<E>>(&self, mut cs: CS, root: &Self::Hash, leaf: &[Boolean], path: &[Boolean], witness: &[Self::Hash]) -> Result<Boolean, SynthesisError> {
-        let leaf_hash = self.hash_leaf(
-            cs.namespace(|| "leaf hash calculation"), 
-            leaf
-        )?;
-
-        self.check_hash_inclusion_for_root(cs, root, &leaf_hash, path, witness)
-    }
-    
-
-    // checks inclusion of the leaf hash into the root
-    fn check_hash_inclusion<CS: ConstraintSystem<E>>(&self, cs: CS, hash: &Self::Hash, path: &[Boolean], witness: &[Self::Hash]) -> Result<Boolean, SynthesisError> {
-        self.check_hash_inclusion_for_root(cs, &self.root, hash, path, witness)
-    }
-    
-    // checks inclusion of the leaf hash into the root
-    fn check_hash_inclusion_for_root<CS: ConstraintSystem<E>>(
+    pub fn check_inclusion<CS: ConstraintSystem<E>>(
         &self, 
         mut cs: CS, 
-        root: &Self::Hash,
-        hash: &Self::Hash, 
-        path: &[Boolean], 
-        witness: &[Self::Hash]
+        elems : &[Num<E>],
+        index: &AllocatedNum<E>, 
+        witness: &[AllocatedNum<E>]
     ) -> Result<Boolean, SynthesisError> {
-        // this tree is not-binary, so lookup procedure is more compicated
-        let path_elements_chunks = self.branching_factor() - 1;
-        // TODO: make generic later
-        assert_eq!(path_elements_chunks, 3); // take by 3 elements from the witness
-        assert!(witness.len() % path_elements_chunks == 0);
-        assert!(witness.len() / path_elements_chunks == path.len() / self.path_bits_per_level());
-        assert!(path.len() % self.path_bits_per_level() == 0);
-        
-        // This is an injective encoding, as cur is a
-        // point in the prime order subgroup.
-        let mut cur = hash.clone();
 
-        for (chunk_number, (bits, path_elements)) in path.chunks_exact(self.path_bits_per_level())
-                                                .zip(witness.chunks_exact(path_elements_chunks))
-                                                .enumerate() {
-            let cs = &mut cs.namespace(|| format!("merkle tree chunk {}", chunk_number));
+        let path = index.into_bits_le(cs.namespace(|| "construct path from index"))?;
+        let mut leaf_hash = self.hash_elems_into_leaf(cs.namespace(|| "encode elems into leaf"), elems)?;
+        let leaf_hash_var = leaf_hash.simplify(cs.namespace(|| "simplification"))?;
+        let res = self.check_hash_inclusion_with_parsed_path( 
+            cs.namespace(|| "merklee proof"),
+            leaf_hash_var,
+            path, 
+            witness,
+        );
 
-            let mut path_to_shuffle = vec![cur];
-            path_to_shuffle.extend_from_slice(&path_elements);
-
-            assert_eq!(path_to_shuffle.len(), self.branching_factor());
-
-            let swaps = self.calculate_swaps(
-                cs.namespace(|| "calculate swaps"),
-                bits
-            )?;
-
-            let (new_0, new_1) = AllocatedNum::conditionally_reverse(
-                cs.namespace(|| "conditional reversal of 0 and 1"),
-                &path_to_shuffle[0],
-                &path_to_shuffle[1],
-                &swaps[0]
-            )?;
-
-            path_to_shuffle[0] = new_0;
-            path_to_shuffle[1] = new_1;
-
-            let (new_1, new_2) = AllocatedNum::conditionally_reverse(
-                cs.namespace(|| "conditional reversal of 1 and 2"),
-                &path_to_shuffle[1],
-                &path_to_shuffle[2],
-                &swaps[1]
-            )?;
-
-            path_to_shuffle[1] = new_1;
-            path_to_shuffle[2] = new_2;
-
-            let (new_2, new_3) = AllocatedNum::conditionally_reverse(
-                cs.namespace(|| "conditional reversal of 2 and 3"),
-                &path_to_shuffle[2],
-                &path_to_shuffle[3],
-                &swaps[2]
-            )?;
-
-            path_to_shuffle[2] = new_2;
-            path_to_shuffle[3] = new_3;
-
-            cur = self.hash_node(
-                cs.namespace(|| "hash round"), 
-                &path_to_shuffle, 
-                chunk_number
-            )?;
-        }
-
-        let included = AllocatedNum::equals(
-            cs.namespace(|| "compare roots"), 
-            &cur, 
-            &root
-        )?;
-
-        Ok(included)
-    }
-
-
-    fn update<CS: ConstraintSystem<E>>(&mut self, mut cs: CS, leaf: &[Boolean], path: &[Boolean], witness: &[Self::Hash]) -> Result<Self::Hash, SynthesisError> {
-        let leaf_hash = self.hash_leaf(
-            cs.namespace(|| "leaf hash calculation"), 
-            leaf
-        )?;
-
-        self.update_from_hash(cs, &leaf_hash, path, witness)
-    }
-
-    fn update_from_hash<CS: ConstraintSystem<E>>(&mut self, mut cs: CS, hash: &Self::Hash, path: &[Boolean], witness: &[Self::Hash]) -> Result<Self::Hash, SynthesisError> {
-        // this tree is not-binary, so lookup procedure is more compicated
-        let path_elements_chunks = self.branching_factor() - 1;
-        // TODO: make generic later
-        assert_eq!(path_elements_chunks, 3);
-        assert!(witness.len() % path_elements_chunks == 0);
-        assert!(witness.len() / path_elements_chunks == path.len() / self.path_bits_per_level());
-        assert!(path.len() % self.path_bits_per_level() == 0);
-        
-        // This is an injective encoding, as cur is a
-        // point in the prime order subgroup.
-        let mut cur = hash.clone();
-
-        for (chunk_number, (bits, path_elements)) in path.chunks_exact(self.path_bits_per_level())
-                                                .zip(witness.chunks_exact(path_elements_chunks))
-                                                .enumerate() {
-            let cs = &mut cs.namespace(|| format!("merkle tree chunk {}", chunk_number));
-
-            let mut path_to_shuffle = vec![cur];
-            path_to_shuffle.extend_from_slice(&path_elements);
-
-            assert_eq!(path_to_shuffle.len(), self.branching_factor());
-
-            let swaps = self.calculate_swaps(
-                cs.namespace(|| "calculate swaps"),
-                bits
-            )?;
-
-            let (new_0, new_1) = AllocatedNum::conditionally_reverse(
-                cs.namespace(|| "conditional reversal of 0 and 1"),
-                &path_to_shuffle[0],
-                &path_to_shuffle[1],
-                &swaps[0]
-            )?;
-
-            path_to_shuffle[0] = new_0;
-            path_to_shuffle[1] = new_1;
-
-            let (new_1, new_2) = AllocatedNum::conditionally_reverse(
-                cs.namespace(|| "conditional reversal of 1 and 2"),
-                &path_to_shuffle[1],
-                &path_to_shuffle[2],
-                &swaps[1]
-            )?;
-
-            path_to_shuffle[1] = new_1;
-            path_to_shuffle[2] = new_2;
-
-            let (new_2, new_3) = AllocatedNum::conditionally_reverse(
-                cs.namespace(|| "conditional reversal of 2 and 3"),
-                &path_to_shuffle[2],
-                &path_to_shuffle[3],
-                &swaps[2]
-            )?;
-
-            path_to_shuffle[2] = new_2;
-            path_to_shuffle[3] = new_3;
-
-            cur = self.hash_node(
-                cs.namespace(|| "hash round"), 
-                &path_to_shuffle, 
-                chunk_number
-            )?;
-        }
-
-        self.root = cur.clone();
-
-        Ok(cur)
-    }
-
-    fn update_intersect<CS: ConstraintSystem<E>>(&mut self, cs: CS, leafs: (&[Boolean], &[Boolean]), paths: (&[Boolean], &[Boolean]), witnesses: (&[Self::Hash], &[Self::Hash])) -> Result<Self::Hash, SynthesisError> {
-        unimplemented!();
-    }
-
-    fn update_from_hash_intersect<CS: ConstraintSystem<E>>(&mut self, cs: CS, leafs: (&Self::Hash, &Self::Hash), paths: (&[Boolean], &[Boolean]), witnesses: (&[Self::Hash], &[Self::Hash])) -> Result<Self::Hash, SynthesisError> {
-        unimplemented!();
+        res
     }
 }
 
-#[test]
-fn test_poseidon_quartic_tree() {
+
+#[cfg(test)]
+mod test {
     use bellman::pairing::bn256::{Bn256, Fr};
-    use bellman::pairing::ff::PrimeField;
-    use crate::poseidon::{PoseidonEngine, PoseidonHashParams, self};
-    use crate::poseidon::bn256::Bn256PoseidonParams;
-    use crate::circuit::poseidon_hash;
-    use crate::group_hash::BlakeHasher;
-    use crate::circuit::test::*;
+    use bellman::pairing::ff::{PrimeField, PrimeFieldRepr};
+    use bellman::Circuit;
+    use bellman::redshift::IOP::hashes::rescue::{Rescue, RescueParams};
+    use bellman::redshift::IOP::hashes::rescue::bn256_rescue_params::BN256Rescue;
+    
+    use bellman::redshift::IOP::oracle::Oracle;
+    use bellman::redshift::IOP::oracle::coset_combining_rescue_tree::*;
+    
     use crate::circuit::num::AllocatedNum;
-    use crate::circuit::merkle::{MerkleTree, PoseidonHashTree};
+    use crate::circuit::boolean::AllocatedBit;
+    use crate::circuit::recursive_redshift::rescue::*;
+    use crate::circuit::recursive_redshift::bn256_rescue_sbox::BN256RescueSbox;
+    use crate::circuit::test::TestConstraintSystem;
 
-    let leaf_hashes = (0..16).map(|el| Fr::from_str(&el.to_string()).unwrap()).collect::<Vec<_>>();
-    let params = Bn256PoseidonParams::new_for_quartic_tree::<BlakeHasher>();
+    use std::iter::FromIterator;
+    use super::*;
 
-    let mut node_hashes_1: Vec<Fr> = vec![];
-    for chunk in leaf_hashes.chunks(4) {
-        let hash = poseidon::poseidon_hash::<Bn256>(&params, &chunk[..]);
-        node_hashes_1.push(hash[0]);
+    #[test]
+    fn test_rescue_merkle_proof_gadget() {
+        struct TestCircuit<E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> {
+            size: usize,
+            num_elems_per_leaf: usize,
+            sbox: SBOX,
+            rescue_params: RP,
+
+            root_hash: E::Fr,
+            leaf_elems: Vec<E::Fr>,
+            index: u64,
+            merkle_proof: Vec<E::Fr>,
+        }
+
+        impl<E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> Circuit<E> for TestCircuit<E, RP, SBOX> {
+            fn synthesize<CS: ConstraintSystem<E>>(
+                self,
+                cs: &mut CS,
+            ) -> Result<(), SynthesisError> {
+
+                let root = AllocatedNum::alloc(cs.namespace(|| "allocate root"), || Ok(self.root_hash))?;
+                let index = self.index;
+
+                let elems : Vec<Num<E>> = self.leaf_elems.into_iter().map(|e| {
+                    let temp = AllocatedNum::alloc(cs.namespace(|| "allocate leaf elem"), || Ok(e)).expect("must allocate");
+                    let res : Num<E> = temp.into();
+                    res
+                }).collect();
+
+                let proof : Vec<AllocatedNum<E>> = self.merkle_proof.into_iter().map(|e| {
+                    AllocatedNum::alloc(cs.namespace(|| "allocate merkle proof elem"), || Ok(e)).expect("must allocate")
+                }).collect();
+
+                let index = AllocatedNum::alloc(
+                    cs.namespace(|| "index"), 
+                    || {
+                        let mut r = <E::Fr as PrimeField>::Repr::default();
+                        r.as_mut()[0] = index;
+                        let x = <E::Fr as PrimeField>::from_repr(r).expect("must convert");
+                        Ok(x)
+                    },
+                )?;
+                
+                let tree = RescueTreeGadget::new(
+                    root,
+                    self.size,
+                    self.num_elems_per_leaf,
+                    &self.rescue_params,
+                    self.sbox,
+                );
+
+                let is_valid = tree.check_inclusion(
+                    cs.namespace(|| "test merkle proof"), 
+                    &elems[..], 
+                    &index, 
+                    &proof[..],
+                )?;
+
+                // validate the proof
+                cs.enforce(
+                    || "Validate output bit of Merkle proof", 
+                    |lc| lc + &is_valid.lc(CS::one(), E::Fr::zero()), 
+                    |lc| lc + CS::one(),
+                    |lc| lc + CS::one(),
+                );
+
+                Ok(())
+            }
+        }
+
+        let bn256_rescue_params = BN256Rescue::default();
+
+        let (index, root, elems, proof) = {
+
+            let oracle_params = RescueTreeParams {
+                values_per_leaf: 4,
+                rescue_params: &bn256_rescue_params,
+                _marker: std::marker::PhantomData::<Fr>,
+            };
+
+            // we are going to create tree constaining 4096 elements, with 4 elements per leaf
+            // hence there are 1024 leaves
+
+            let values : Vec<Fr> = (0..4096).scan(Fr::multiplicative_generator(), |cur, _| {
+                let res = cur.clone();
+                cur.double();
+                Some(res)
+            }).collect();
+
+            let tree = FriSpecificRescueTree::create(&values[..], &oracle_params);
+
+            assert_eq!(tree.size(), 1024);
+
+            let root = tree.get_commitment();
+
+            // let out index be 42
+
+            let leaf_elements = Vec::from_iter(values[42*4..43*4].iter().cloned());
+            let query : CosetCombinedQuery<Fr> = tree.produce_query(42*4..43*4, &values[42*4..43*4], &oracle_params);
+            let proof = query.raw_merkle_proof();
+
+            (42, root, leaf_elements, proof)
+        };
+
+        let test_circuit = TestCircuit::<Bn256, BN256Rescue, BN256RescueSbox> {
+            size: 1024,
+            num_elems_per_leaf: 4,
+            sbox: BN256RescueSbox{},
+            rescue_params: bn256_rescue_params,
+
+            root_hash: root,
+            leaf_elems: elems,
+            index: index as u64,
+            merkle_proof: proof,
+        };
+
+        let mut cs = TestConstraintSystem::<Bn256>::new();
+        test_circuit.synthesize(&mut cs).expect("should synthesize");
+
+        assert!(cs.is_satisfied());
+
+        println!("Rescue tree for 4096 elements with 4 elements per leaf requires {} constraints", cs.num_constraints());
     }
-
-    // println!("Node hashes = {:?}", node_hashes_1);
-
-    let root_hash = poseidon::poseidon_hash::<Bn256>(&params, &node_hashes_1[..])[0];
-
-    let element_to_proof = 15;
-    let mut cs = TestConstraintSystem::<Bn256>::new();
-
-    let input = AllocatedNum::alloc(cs.namespace(|| format!("input {}", element_to_proof)), 
-    || {
-        Ok(leaf_hashes[element_to_proof])
-    }).unwrap();
-
-    let root = AllocatedNum::alloc(cs.namespace(|| "expected root"), 
-    || {
-        Ok(root_hash)
-    }).unwrap();
-
-    let path_as_fr = AllocatedNum::alloc(cs.namespace(|| "path"), 
-    || {
-        Ok(Fr::from_str(&element_to_proof.to_string()).unwrap())
-    }).unwrap();
-
-    let mut path_bits = path_as_fr.into_bits_le(
-        cs.namespace(|| "decompose path")
-    ).unwrap();
-    path_bits.truncate(4);
-
-    let witness: Vec<AllocatedNum<Bn256>> = vec![
-                        leaf_hashes[12].clone(),
-                        leaf_hashes[13].clone(),
-                        leaf_hashes[14].clone(),
-                        node_hashes_1[0].clone(),
-                        node_hashes_1[1].clone(),
-                        node_hashes_1[2].clone()].into_iter().enumerate().map(|(i, el)| {
-                            AllocatedNum::alloc(cs.namespace(|| format!("witness {}", i)), 
-                                || {
-                                    Ok(el)
-                                }).unwrap()
-                        }).collect();
-
-    let zero = AllocatedNum::alloc(cs.namespace(|| "root"), 
-    || {
-        Ok(Fr::zero())
-    }).unwrap();
-
-    let tree = PoseidonHashTree::new(
-        root.clone(), 
-        2,
-        2, 
-        &params, 
-        zero
-    );
-
-    let is_included = tree.check_hash_inclusion(
-        cs.namespace(|| "check inclusion"),
-        &input,
-        &path_bits[..],
-        &witness[..]
-    ).unwrap();
-
-    assert!(is_included.get_value().unwrap());
-
-    println!("Tree for 16 elements and 2 levels requires {} constraints", cs.num_constraints());
-
-    // let inputs: Vec<AllocatedNum<Bn256>> = leaf_hashes.iter().enumerate().map(|(i, b)| {
-    //         AllocatedNum::alloc(cs.namespace(|| format!("input {}", i)), Some(*b)).unwrap()
-    // }).collect();
-}
-
-
-
-
-fn pack_binary_decomposition<E, CS> (
-    mut cs: CS,
-    bits: &[Boolean],
-) -> Result<AllocatedNum<E>, SynthesisError> 
-    where E: Engine,
-          CS: ConstraintSystem<E>
-{
-    assert!(bits.len() <= E::Fr::CAPACITY as usize);
-    let mut num = Num::<E>::zero();
-    let mut coeff = E::Fr::one();
-    for bit in bits {
-        num = num.add_bool_with_coeff(CS::one(), &bit, coeff);
-        coeff.double();
-    }
-
-    let allocated = AllocatedNum::alloc(
-        cs.namespace(|| "allocate packed value"),
-        || Ok(*num.get_value().get()?)
-    )?;
-
-    cs.enforce(
-        || "pack binary decomposition",
-        |lc| lc + allocated.get_variable(),
-        |lc| lc + CS::one(),
-        |_| num.lc(E::Fr::one())
-    );
-
-    Ok(allocated)
 }

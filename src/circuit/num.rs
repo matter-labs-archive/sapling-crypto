@@ -85,6 +85,13 @@ impl<E: Engine> AllocatedNum<E> {
         })
     }
 
+    pub fn from_var(variable: Variable, value: Option<E::Fr>) -> Self {
+        AllocatedNum {
+            value,
+            variable,
+        }
+    } 
+
     pub fn inputize<CS>(
         &self,
         mut cs: CS
@@ -474,6 +481,43 @@ impl<E: Engine> AllocatedNum<E> {
     /// Limits number of bits. The easiest example when required
     /// is to add or subtract two "small" (with bit length smaller 
     /// than one of the field) numbers and check for overflow
+    /// return the bit packed result
+    pub fn convert_to_bits<CS>(
+        &self,
+        mut cs: CS,
+        number_of_bits: usize
+    ) -> Result<Vec<Boolean>, SynthesisError>
+        where CS: ConstraintSystem<E>
+    {
+        // do the bit decomposition and check that higher bits are all zeros
+
+        let mut bits = self.into_bits_le(
+            cs.namespace(|| "unpack to limit number of bits")
+        )?;
+
+        let lower_bits : Vec<Boolean> = bits.drain(0..number_of_bits).into_iter().map(|b| Boolean::from(b)).collect();
+
+        // repack
+
+        let mut top_bits_lc = Num::<E>::zero();
+        let mut coeff = E::Fr::one();
+        for bit in bits.into_iter() {
+            top_bits_lc = top_bits_lc.add_bool_with_coeff(CS::one(), &bit, coeff);
+            coeff.double();
+        }
+
+        // enforce packing and zeroness
+        cs.enforce(
+            || "repack top bits",
+            |lc| lc,
+            |lc| lc + CS::one(),
+            |_| top_bits_lc.lc(E::Fr::one())
+        );
+
+        Ok(lower_bits)
+    }
+
+    /// same as previousm but doesn't return anything
     pub fn limit_number_of_bits<CS>(
         &self,
         mut cs: CS,
@@ -840,6 +884,39 @@ impl<E: Engine> Num<E> {
         self.lc = lc;
     }
 
+    /// check is the combination in question exactly contains the only one element (or even empty)
+    /// it yes - recombine and return that unique element
+    pub fn simplify<CS: ConstraintSystem<E>>(&mut self, mut cs: CS) -> Result<AllocatedNum<E>, SynthesisError> {
+
+        let in_lc = self.get_lc();
+
+        assert!(!in_lc.is_empty(), " lc is empty before simplification");
+        
+        let res = match in_lc.is_simple() {
+            Some(x) => AllocatedNum::from_var(x, self.get_value()),
+            None => {
+                let out_alloc = AllocatedNum::alloc(
+                    cs.namespace(|| "simplified element"),
+                    || { self.get_value().ok_or(SynthesisError::AssignmentMissing)} 
+                )?;
+
+                cs.enforce(
+                    || "simplified element = input element", 
+                    |lc| lc + in_lc, 
+                    |lc| lc + CS::one(),
+                    |lc| lc + out_alloc.get_variable(),
+                );
+                    
+                // As we've constrained this currentcombination, we can
+                // substitute for the new variable to shorten subsequent combinations.
+                self.lc = LinearCombination::zero() + out_alloc.get_variable();
+                
+                out_alloc
+            }, 
+        };
+
+        Ok(res)
+    }
 }
 
 
