@@ -192,14 +192,14 @@ impl<E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> RescueGadget<E, RP
                     self.sponge = SpongeState::Squeezing(rescue_duplex::<E, _, RP, SBOX>(
                         &mut self.state,
                         input,
-                        cs.namespace(|| "rescue duplex")
+                        cs.namespace(|| "rescue duplex"),
                         params,
-                    ));
+                    )?);
                 }
                 SpongeState::Squeezing(ref mut output) => {
                     for entry in output.iter_mut() {
                         if let Some(e) = entry.take() {
-                            return e;
+                            return Ok(e);
                         }
                     }
                     // We've already squeezed out all available elements
