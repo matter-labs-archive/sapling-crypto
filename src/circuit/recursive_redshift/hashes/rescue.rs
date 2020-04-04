@@ -23,6 +23,8 @@ use crate::circuit::num::*;
 
 pub trait RescueSbox<E: Engine>: Clone + Copy {
 
+    fn new() -> Self;
+
     fn rescue_alpha<CS : ConstraintSystem<E>>(elem: &Num<E>, cs: CS) -> Result<Num<E>, SynthesisError>;
 
     fn rescue_inalpha<CS : ConstraintSystem<E>>(elem: &Num<E>, cs: CS) -> Result<Num<E>, SynthesisError>;

@@ -21,16 +21,26 @@ use std::marker::PhantomData;
 
 use crate::circuit::num::*;
 use crate::circuit::boolean::*;
-use super::rescue::*;
+use crate::circuit::recursive_redshift::hashes::rescue::*;
+
+use super::*;
+
+
+pub struct RescueTreeGadgetParams<'a, F: PrimeField, RP: RescueParams<F>> {
+    pub size: usize,
+    pub num_elems_per_leaf: usize,
+    pub rescue_params: &'a RP,
+    pub _marker: std::marker::PhantomData<F>,
+}
 
 
 pub struct RescueTreeGadget<'a, E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> {
-    root: AllocatedNum<E>,
     size: usize,
     height: usize,
     num_elems_per_leaf: usize,
     params: &'a RP,
     sbox: SBOX,
+    _marker: std::marker::PhantomData<E>,
 }
 
 impl<'a, E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> RescueTreeGadget<'a, E, RP, SBOX> {
@@ -45,17 +55,17 @@ impl<'a, E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> RescueTreeGadg
         pow
     }
 
-    pub fn new(root: AllocatedNum<E>, size: usize, num_elems_per_leaf: usize, params: &'a RP, sbox: SBOX) -> Self {
+    pub fn new_impl(size: usize, num_elems_per_leaf: usize, params: &'a RP, sbox: SBOX) -> Self {
         assert!(size.is_power_of_two());
         let height = Self::log2_floor(size);
 
         Self {
-            root,
             size,
             height,
             num_elems_per_leaf,
             params,
             sbox,
+            _marker: std::marker::PhantomData::<E>,
         }
     }
 
@@ -90,9 +100,10 @@ impl<'a, E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> RescueTreeGadg
     // checks inclusion of the leaf hash into the root
     fn check_hash_inclusion_with_parsed_path<CS: ConstraintSystem<E>>(
         &self, 
-        mut cs: CS, 
+        mut cs: CS,
+        root: &AllocatedNum<E>, 
         leaf_hash : AllocatedNum<E>,
-        path: Vec<Boolean>, 
+        path: &[Boolean], 
         witness: &[AllocatedNum<E>]
     ) -> Result<Boolean, SynthesisError> {
         if self.height != witness.len() {
@@ -131,25 +142,26 @@ impl<'a, E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> RescueTreeGadg
         let included = AllocatedNum::equals(
             cs.namespace(|| "compare roots"), 
             &cur, 
-            &self.root
+            &root
         )?;
 
         Ok(included)
     }
 
-    pub fn check_inclusion<CS: ConstraintSystem<E>>(
+    pub fn validate_impl<CS: ConstraintSystem<E>>(
         &self, 
         mut cs: CS, 
+        root: &AllocatedNum<E>, 
         elems : &[Num<E>],
-        index: &AllocatedNum<E>, 
+        path: &[Boolean], 
         witness: &[AllocatedNum<E>]
     ) -> Result<Boolean, SynthesisError> {
 
-        let path = index.into_bits_le(cs.namespace(|| "construct path from index"))?;
         let mut leaf_hash = self.hash_elems_into_leaf(cs.namespace(|| "encode elems into leaf"), elems)?;
         let leaf_hash_var = leaf_hash.simplify(cs.namespace(|| "simplification"))?;
         let res = self.check_hash_inclusion_with_parsed_path( 
             cs.namespace(|| "merklee proof"),
+            root,
             leaf_hash_var,
             path, 
             witness,
@@ -157,6 +169,37 @@ impl<'a, E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> RescueTreeGadg
 
         res
     }
+}
+
+
+impl<'a, E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> OracleGadget<E> for RescueTreeGadget<'a, E, RP, SBOX> {
+    
+    type Params = RescueTreeGadgetParams<'a, E::Fr, RP>;
+    type Commitment = AllocatedNum<E>;
+    type Proof = Vec<AllocatedNum<E>>;
+    
+
+    fn new(params: Self::Params) -> Self {
+        Self::new_impl(params.size, params.num_elems_per_leaf, params.rescue_params, SBOX::new())
+    }
+
+    fn validate<CS: ConstraintSystem<E>>(
+        &self, 
+        cs: CS, 
+        elems : &[Num<E>],
+        path: &[Boolean],
+        commitment: &Self::Commitment, 
+        proof: &Self::Proof,
+    ) -> Result<Boolean, SynthesisError> {
+
+        self.validate_impl(
+            cs, 
+            commitment, 
+            elems,
+            path,
+            proof,
+        )
+    } 
 }
 
 
@@ -172,10 +215,11 @@ mod test {
     use bellman::redshift::IOP::oracle::coset_combining_rescue_tree::*;
     
     use crate::circuit::num::AllocatedNum;
-    use crate::circuit::boolean::AllocatedBit;
-    use crate::circuit::recursive_redshift::rescue::*;
-    use crate::circuit::recursive_redshift::bn256_rescue_sbox::BN256RescueSbox;
+    use crate::circuit::boolean::AllocatedBit;    
     use crate::circuit::test::TestConstraintSystem;
+
+    use crate::circuit::recursive_redshift::hashes::rescue::*;
+    use crate::circuit::recursive_redshift::hashes::bn256_rescue_sbox::BN256RescueSbox;
 
     use std::iter::FromIterator;
     use super::*;
@@ -222,31 +266,29 @@ mod test {
                         Ok(x)
                     },
                 )?;
-                
-                let tree = RescueTreeGadget::new(
-                    root,
-                    self.size,
-                    self.num_elems_per_leaf,
-                    &self.rescue_params,
-                    self.sbox,
-                );
+                let path = index.into_bits_le(cs.namespace(|| "parse index"))?;
 
-                let is_valid = tree.check_inclusion(
+                let gadger_params = RescueTreeGadgetParams {
+                    size: self.size,
+                    num_elems_per_leaf: self.num_elems_per_leaf,
+                    rescue_params: &self.rescue_params,
+                    _marker: std::marker::PhantomData::<E::Fr>,
+                };
+                let tree = RescueTreeGadget::<E, RP, SBOX>::new(gadger_params);
+
+                let is_valid = tree.validate(
                     cs.namespace(|| "test merkle proof"), 
                     &elems[..], 
-                    &index, 
-                    &proof[..],
+                    &path,
+                    &root, 
+                    &proof,
                 )?;
 
-                // validate the proof
-                cs.enforce(
-                    || "Validate output bit of Merkle proof", 
-                    |lc| lc + &is_valid.lc(CS::one(), E::Fr::zero()), 
-                    |lc| lc + CS::one(),
-                    |lc| lc + CS::one(),
-                );
-
-                Ok(())
+                Boolean::enforce_equal(
+                    cs.namespace(|| "Validate output bit of Merkle proof"),
+                    &is_valid,
+                    &Boolean::constant(true),
+                )
             }
         }
 

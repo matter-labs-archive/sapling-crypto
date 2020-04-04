@@ -85,6 +85,10 @@ impl BN256RescueSbox {
 
 impl RescueSbox<E> for BN256RescueSbox {
 
+    fn new() -> Self {
+        BN256RescueSbox{}
+    }
+
     fn rescue_alpha<CS : ConstraintSystem<E>>(elem: &Num<E>, mut cs: CS) -> Result<Num<E>, SynthesisError> {
 
         #![allow(non_snake_case)]       
