@@ -75,6 +75,14 @@ impl<E: Engine> FriUtilsGadget<E> {
         assert!(self.log_domain_size > 0);
     }
 
+    fn bitreverse(n: usize, l: usize) -> usize {
+        let mut r = n.reverse_bits();
+        // now we need to only use the bits that originally were "last" l, so shift
+        r >>= (std::mem::size_of::<usize>() * 8) - l;
+
+        r
+    }
+
     pub fn get_coset_idx_for_natural_index<'a>(&self, natural_index: &'a [Boolean]) -> &'a[Boolean] {
         &natural_index[0..(self.log_domain_size - self.collapsing_factor)]
     }
@@ -99,26 +107,25 @@ impl<E: Engine> FriUtilsGadget<E> {
     pub fn coset_interpolation_value<CS: ConstraintSystem<E>>(
         &self,
         mut cs: CS,
-        coset_values: &[Num<E>],
+        coset_values: &[AllocatedNum<E>],
         coset_tree_idx: &[Boolean],
         supposed_value: &Num<E>,
         challenge: &AllocatedNum<E>,
         // may be it is a dirty Hack(
         // contains inversed generator of the layer of coset vauers
-        constrainted_omega_inv: &[AllocatedNum<E>],
+        constrainted_omega_inv: &AllocatedNum<E>,
     ) -> Result<Boolean, SynthesisError> {
 
         let coset_size = self.wrapping_factor;
-        let mut this_level_values : Vec<AllocatedNum<E>> = Vec::with_capacity(coset_size/2);
-        let mut next_level_values : Vec<AllocatedNum<E>> = vec![E::Fr::zero(); coset_size / 2];
+        let mut this_level_values : Vec<AllocatedNum<E>>;
+        let mut next_level_values : Vec<AllocatedNum<E>>;
         
-        let mut coset_omega = AllocatedNum::pow(
+        let mut coset_omega_inv = AllocatedNum::pow(
             cs.namespace(|| "get coset specific omega"), 
-            constrainted_generator, 
+            constrainted_omega_inv, 
             coset_tree_idx,
         )?;
 
-        let mut omega = self.omega.clone();
         let mut omega_inv = self.omega_inv.clone();
         let mut domain_size = self.domain_size;
         let mut log_domain_size = self.log_domain_size;
@@ -127,12 +134,12 @@ impl<E: Engine> FriUtilsGadget<E> {
         for wrapping_step in 0..self.collapsing_factor {
 
             let inputs = if wrapping_step == 0 {
-                values
+                &coset_values[..]
             } else {
-                &this_level_values[..(coset_size >> wrapping_step)]
+                &this_level_values[..]
             };
 
-            for (pair_idx, (pair, o)) in inputs.chunks(2).zip(next_level_values.iter_mut()).enumerate() 
+            for (pair_idx, pair) in inputs.chunks(2).enumerate() 
             {
                 // let omega denote the generator of the current layer
                 // for each pair (f0, f1) with pair_index i
@@ -146,21 +153,21 @@ impl<E: Engine> FriUtilsGadget<E> {
                 let one = E::Fr::one();
                 let mut minus_one = one.clone();
                 minus_one.negate();
-                let (f0, f1) = pair;
+                let (f0, f1) = (pair[0], pair[1]);
 
                 let coef = match pair_idx {
                     0 => one.clone(),
                     _ => {
-                        let idx = bitreverse(2 * pair_idx, log_domain_size);
+                        let idx = Self::bitreverse(2 * pair_idx, log_domain_size);
                         omega_inv.pow([idx as u64])
                     },
                 };
            
                 let mut v_even : Num<E> = f0.into();
-                v_even.mut_add_number_with_coeff(&f_1, one.clone());
+                v_even.mut_add_number_with_coeff(&f1, one.clone());
 
                 let mut v_odd : Num<E> = f0.into();
-                v_odd.mut_add_number_with_coeff(&f_1, minus_one.clone());
+                v_odd.mut_add_number_with_coeff(&f1, minus_one.clone());
                 v_odd = v_odd.mul_by_var_with_coeff(&coset_omega, coef).into();
 
                 // res = (v_odd * challenge + v_even) * two_inv;

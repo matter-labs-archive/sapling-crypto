@@ -951,15 +951,17 @@ impl<E: Engine> Num<E> {
     /// in R1CS multiplication of two linear combinations will inevitably lead
     /// to the allocation of new variable
     pub fn mul<CS>(mut cs: CS, left: &Self, right: &Self) -> Result<AllocatedNum<E>, SynthesisError>
-    where CS: ConstraintSystem
+    where CS: ConstraintSystem<E>
     {
-        let res = AllocatedNum::alloc(|| "mul of two Nums", || {
-            match (left.value(), right.value()) {
+        let res = AllocatedNum::alloc(
+            cs.namespace(|| "mul of two Nums"), 
+            || {
+            match (left.get_value(), right.get_value()) {
                 (Some(mut x), Some(y)) => {
-                    x.mul_assign(y);
-                    Some(x)
+                    x.mul_assign(&y);
+                    Ok(x)
                 }
-                (_, _) => None,
+                (_, _) => Err(SynthesisError::AssignmentMissing)       
             }
         })?;
         
@@ -967,29 +969,29 @@ impl<E: Engine> Num<E> {
             || "multiplication check",
             |lc| lc + left.get_lc(),
             |lc| lc + right.get_lc(),
-            |lc| lc + res,
+            |lc| lc + (E::Fr::one(), res.get_variable()),
         );
 
         Ok(res)
     }
 
-    pub fn mul_by_var_with_coeff<CS>(mut cs: CS, num: &Self, var: &AllocatedNum<E>, coef: E::Fr) -> Result<AllocatedNum<E>, SynthesisError>
-    where CS: ConstraintSystem {
+    pub fn mul_by_var_with_coeff<CS>(cs: CS, num: &Self, var: &AllocatedNum<E>, coef: E::Fr) -> Result<AllocatedNum<E>, SynthesisError>
+    where CS: ConstraintSystem<E> {
         
-        let value = var.value().and_then(|x| {
+        let value = var.get_value().and_then(|mut x| {
             x.mul_assign(&coef);
             Some(x)
         });
 
         let temp_num = Num {
             value, 
-            lc: LinearCombination::zero() + (coef, var),
+            lc: LinearCombination::zero() + (coef, var.get_variable()),
         };
         
-        Self::mul(cs, num, temp)
+        Self::mul(cs, num, &temp_num)
     }
 
-    pub fn enforce<CS: ConstraintSystem>(mut cs: CS, a: &Self, b: &Self, c: &Self) 
+    pub fn enforce<CS: ConstraintSystem<E>>(mut cs: CS, a: &Self, b: &Self, c: &Self) 
     {
         cs.enforce(
             || "Num: enforce",
