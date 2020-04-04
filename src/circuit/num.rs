@@ -676,6 +676,36 @@ impl<E: Engine> AllocatedNum<E> {
     pub fn get_variable(&self) -> Variable {
         self.variable
     }
+
+    // Montgomery double and add algorithm
+    pub fn pow<CS: ConstraintSystem<E>>(mut cs: CS, base: &Self, x: &[Boolean]) -> Result<Self, SynthesisError> {
+        
+        let mut r0 = Self::from_var(CS::one(), Some(E::Fr::one()));
+        let mut r1 = base.clone();
+        for b in x.iter().rev() {
+            // RO = RO * R1 if b == 1 else R0^2
+            // R1 = R1^2 if b == 1 else R0 * R1
+            let r0_squared = r0.square(cs.namespace(|| "square R0"))?;
+            let r1_squared = r1.square(cs.namespace(|| "square R1"))?;
+            let r0_times_r1 = r0.mul(cs.namespace(|| "R0 x R1"), &r1)?;
+            
+            r0 = AllocatedNum::conditionally_select(
+                cs.namespace(|| "construct R0 iteration"),
+                &r0_times_r1,
+                &r0_squared,
+                b,
+            )?;
+
+            r1 = AllocatedNum::conditionally_select(
+                cs.namespace(|| "construct R1 iteration"),
+                &r1_squared,
+                &r0_times_r1,
+                b,
+            )?;
+        }
+
+        Ok(r0)
+    }
 }
 
 pub struct Num<E: Engine> {
