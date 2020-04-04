@@ -21,8 +21,8 @@ pub struct FriUtilsGadget<E: Engine> {
     log_domain_size: usize,
     collapsing_factor: usize,
     wrapping_factor: usize,
-    omega: E::Fr,
     omega_inv: E::Fr,
+    two: E::Fr,
     two_inv: E::Fr,
     _marker: std::marker::PhantomData<E>,
 }
@@ -59,8 +59,8 @@ impl<E: Engine> FriUtilsGadget<E> {
             log_domain_size,
             collapsing_factor,
             wrapping_factor: 1<<collapsing_factor,
-            omega,
             omega_inv,
+            two,
             two_inv,
             _marker: std::marker::PhantomData::<E>,
         }
@@ -70,7 +70,6 @@ impl<E: Engine> FriUtilsGadget<E> {
     pub fn next_domain(&mut self) {
         self.domain_size >>= self.collapsing_factor;
         self.log_domain_size -= 1;
-        self.omega.double();
         self.omega_inv.double();
 
         assert!(self.log_domain_size > 0);
@@ -99,20 +98,19 @@ impl<E: Engine> FriUtilsGadget<E> {
     // construct constraint which connects two adjacent layers of 
     pub fn coset_interpolation_value<CS: ConstraintSystem<E>>(
         &self,
-        cs: mut CS,
+        mut cs: CS,
         coset_values: &[Num<E>],
         coset_tree_idx: &[Boolean],
         supposed_value: &Num<E>,
         challenge: &AllocatedNum<E>,
         // may be it is a dirty Hack(
-        // this array contains generators of all intermediate layers between the layer of coset vauers
-        // and the layer of supposed value
-        constrainted_generator: &[AllocatedNum<E>],
+        // contains inversed generator of the layer of coset vauers
+        constrainted_omega_inv: &[AllocatedNum<E>],
     ) -> Result<Boolean, SynthesisError> {
 
         let coset_size = self.wrapping_factor;
-        let mut this_level_values = Vec::with_capacity(coset_size/2);
-        let mut next_level_values = vec![F::zero(); coset_size / 2];
+        let mut this_level_values : Vec<AllocatedNum<E>> = Vec::with_capacity(coset_size/2);
+        let mut next_level_values : Vec<AllocatedNum<E>> = vec![E::Fr::zero(); coset_size / 2];
         
         let mut coset_omega = AllocatedNum::pow(
             cs.namespace(|| "get coset specific omega"), 
@@ -124,9 +122,9 @@ impl<E: Engine> FriUtilsGadget<E> {
         let mut omega_inv = self.omega_inv.clone();
         let mut domain_size = self.domain_size;
         let mut log_domain_size = self.log_domain_size;
-        let mut 
+        let mut challenge = challenge.clone();
         
-        for wrapping_step in 0..collapsing_factor {
+        for wrapping_step in 0..self.collapsing_factor {
 
             let inputs = if wrapping_step == 0 {
                 values
@@ -138,42 +136,88 @@ impl<E: Engine> FriUtilsGadget<E> {
             {
                 // let omega denote the generator of the current layer
                 // for each pair (f0, f1) with pair_index i
-                // pair_omega = coset_omega * omega^(bitinverse(2*i, log_domain_size))
-                // v_even = f0 + f1
+                // pair_omega = coset_omega_inv * omega_inv^(bitinverse(2*i, log_domain_size))
+                // v_even = f0 + f1;
+                // v_odd = (f0 - f1) * pair_omega;
+                // res = (v_odd * challenge + v_even) * two_inv;
+                // the last equation is equal to: 
+                // v_odd * challenge = 2 * res - v_even
 
-                let idx = bitreverse(base_omega_idx + 2 * pair_idx, *log_domain_size);
-                let divisor = omega_inv.pow([idx as u64]);
-                let f_at_omega = pair[0];
-                let f_at_minus_omega = pair[1];
-                let mut v_even_coeffs = f_at_omega;
-                v_even_coeffs.add_assign(&f_at_minus_omega);
+                let one = E::Fr::one();
+                let mut minus_one = one.clone();
+                minus_one.negate();
+                let (f0, f1) = pair;
 
-                let mut v_odd_coeffs = f_at_omega;
-                v_odd_coeffs.sub_assign(&f_at_minus_omega);
-                v_odd_coeffs.mul_assign(&divisor);
+                let coef = match pair_idx {
+                    0 => one.clone(),
+                    _ => {
+                        let idx = bitreverse(2 * pair_idx, log_domain_size);
+                        omega_inv.pow([idx as u64])
+                    },
+                };
+           
+                let mut v_even : Num<E> = f0.into();
+                v_even.mut_add_number_with_coeff(&f_1, one.clone());
 
-                let mut tmp = v_odd_coeffs;
-                tmp.mul_assign(&challenge);
-                tmp.add_assign(&v_even_coeffs);
-                tmp.mul_assign(&two_inv);
+                let mut v_odd : Num<E> = f0.into();
+                v_odd.mut_add_number_with_coeff(&f_1, minus_one.clone());
+                v_odd = v_odd.mul_by_var_with_coeff(&coset_omega, coef).into();
 
-                *o = tmp;
+                // res = (v_odd * challenge + v_even) * two_inv;
+                // enforce: v_odd * challenge = 2 * res - v_even
+                let res = AllocatedNum::alloc(
+                    cs.namespace(|| "FRI round consistency check: allocate next layer"), 
+                    || { 
+                        match (v_odd.value(), v_even.value(), challenge.value()) {
+                            (Some(mut v_odd), Some(v_even), Some(challenge)) => {
+                                v_odd.mul_assign(&challenge);
+                                v_odd.add_assign(&v_even);
+                                v_odd.add_assign(&two_inv);
+                                Some(v_odd)
+                            },
+                            (_, _, _) => None,
+                        }
+                    })?;
+
+                let mut res_num : Num<E> = res.into();
+                res_num.scale(self.two.clone());
+                res_num.sub_assign(&v_even);
+
+                Num::enforce(
+                    cs.namespace(|| "FRI round consistency check constraint"),
+                    v_odd,
+                    challenge.into(),
+                    res_num,
+                );
+
+                *o = res;
             }
 
-            if wrapping_step != collapsing_factor - 1 {
+            if wrapping_step != self.collapsing_factor - 1 {
                 this_level_values.clear();
                 this_level_values.clone_from(&next_level_values);
-                challenge.double();
+                challenge.square();
             }
             
             omega_inv.square();
             *domain_size /= 2;
             *log_domain_size <<= 1;
             *elem_index = (*elem_index << collapsing_factor) % *domain_size;
+
+            // Really?
+            //coset_omega.square()
         }
 
-    next_level_values[0]
-    }
+    let final_res = next_level_values[0]
+
+    let included = AllocatedNum::equals(
+            cs.namespace(|| "compare roots"), 
+            &cur, 
+            &root
+        )?;
+
+        Ok(included)
+    
     }
 }
 

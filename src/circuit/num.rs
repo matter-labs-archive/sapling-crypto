@@ -947,6 +947,57 @@ impl<E: Engine> Num<E> {
 
         Ok(res)
     }
+
+    /// in R1CS multiplication of two linear combinations will inevitably lead
+    /// to the allocation of new variable
+    pub fn mul<CS>(mut cs: CS, left: &Self, right: &Self) -> Result<AllocatedNum<E>, SynthesisError>
+    where CS: ConstraintSystem
+    {
+        let res = AllocatedNum::alloc(|| "mul of two Nums", || {
+            match (left.value(), right.value()) {
+                (Some(mut x), Some(y)) => {
+                    x.mul_assign(y);
+                    Some(x)
+                }
+                (_, _) => None,
+            }
+        })?;
+        
+        cs.enforce(
+            || "multiplication check",
+            |lc| lc + left.get_lc(),
+            |lc| lc + right.get_lc(),
+            |lc| lc + res,
+        );
+
+        Ok(res)
+    }
+
+    pub fn mul_by_var_with_coeff<CS>(mut cs: CS, num: &Self, var: &AllocatedNum<E>, coef: E::Fr) -> Result<AllocatedNum<E>, SynthesisError>
+    where CS: ConstraintSystem {
+        
+        let value = var.value().and_then(|x| {
+            x.mul_assign(&coef);
+            Some(x)
+        });
+
+        let temp_num = Num {
+            value, 
+            lc: LinearCombination::zero() + (coef, var),
+        };
+        
+        Self::mul(cs, num, temp)
+    }
+
+    pub fn enforce<CS: ConstraintSystem>(mut cs: CS, a: &Self, b: &Self, c: &Self) 
+    {
+        cs.enforce(
+            || "Num: enforce",
+            |lc| lc + a.get_lc(),
+            |lc| lc + b.get_lc(),
+            |lc| lc + c.get_lc(),
+        ); 
+    }
 }
 
 
