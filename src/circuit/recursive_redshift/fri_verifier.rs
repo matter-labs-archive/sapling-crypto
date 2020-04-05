@@ -56,7 +56,8 @@ impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
     ) -> Result<Boolean, SynthesisError>
     {
         let mut fri_helper = FriUtilsGadget::<E>::new(cs.namespace(|| "FRI helper"), initial_domain_size, collapsing_factor);
-        let mut coset_idx = fri_helper.get_coset_idx_for_natural_index(natural_first_element_index);
+        let mut natural_index = &natural_first_element_index[..];
+        let mut coset_idx = fri_helper.get_coset_idx_for_natural_index(natural_index);
         let coset_size = 1 << collapsing_factor;
 
         // check oracle proof for each element in the upper layer!
@@ -119,46 +120,31 @@ impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
         )?;
             
         for ((query, commitment), challenge) 
-            in queries.into_iter().zip(commitments.iter()).zip(fri_challenges.iter().chunks().skip(1)) 
+            in queries.into_iter().zip(commitments.iter()).zip(fri_challenges.chunks(coset_size).skip(1)) 
         {
             // adapt fri_helper for smaller domain
+            fri_helper.next_domain(cs.namespace(|| "shrink domain to next layer"));
+
+            // new natural_elem_index = (old_natural_element_index << collapsing_factor) % domain_size
+            natural_index = &natural_index[collapsing_factor..fri_helper.get_log_domain_size()];
+            let (coset_idx, offset) = fri_helper.get_coset_idx_for_natural_index_extended(natural_index);
+
+            // oracle proof for current layer!
+
+            let oracle_check = oracle.validate(
+                cs.namespace(|| "Oracle proof"),
+                fri_helper.get_log_domain_size(),
+                &query.data.values, 
+                coset_idx,
+                commitment, 
+                &labeled_query.data.proof, 
+            )?;
+
+            final_result = Boolean::and(cs.namespace(|| "and"), &final_result, &oracle_check)?;
             
-            // let mut domain_size = initial_domain_size;
-            // let mut log_domain_size = log_initial_domain_size;
-            // let mut elem_index = (natural_first_element_index << collapsing_factor) % domain_size;
-            // let mut omega_inv = omega_inv.clone();
         }
-   
         
-        // let mut previous_layer_element = FriIop::<F, O, C>::coset_interpolant_value(
-        //     &values[..],
-        //     &fri_challenges[0],
-        //     coset_idx_range,
-        //     collapsing_factor,
-        //     coset_size,
-        //     &mut domain_size,
-        //     &mut log_domain_size,
-        //     &mut elem_index,
-        //     & mut omega_inv,
-        //     two_inv);
-
-        // for ((query, commitment), challenge) 
-        //     in queries.into_iter().zip(commitments.iter()).zip(fri_challenges.iter().skip(1)) 
-        // {
-        //     //check query cardinality here!
-        //     if query.card() != domain_size {
-        //         return Ok(false);
-        //     }
-
-        //     //we do also need to check that coset_indexes are consistent with query
-        //     let (coset_idx_range, elem_tree_idx) = CosetCombiner::get_coset_idx_for_natural_index_extended(
-        //         elem_index, domain_size, log_domain_size, collapsing_factor);
-            
-        //     assert_eq!(coset_idx_range.len(), coset_size);
-
-        //     if query.indexes() != coset_idx_range {
-        //         return Ok(false);
-        //     }              
+                
         //     <O as Oracle<F>>::verify_query(commitment, query, &oracle_params);
             
         //     //round consistency check
