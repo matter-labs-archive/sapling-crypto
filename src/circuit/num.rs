@@ -992,6 +992,13 @@ impl<E: Engine> Num<E> {
         Ok(res)
     }
 
+    /// Sometimes we apriori know that our Num is simple (contains only one AllocedNum with trivial coefficient).
+    /// This method tries to get that AllocatedNum and returns error if we are mistaken in our assumption 
+    /// of the forn of Num (i.e. it is not simple)
+    pub fn force_simplify(&self) -> Result<AllocatedNum<E>, SynthesisError> {
+        self.get_lc().is_simple().map(|x| AllocatedNum::from_var(x, self.get_value())).ok_or(SynthesisError::Unknown)
+    }
+
     /// in R1CS multiplication of two linear combinations will inevitably lead
     /// to the allocation of new variable
     pub fn mul<CS>(mut cs: CS, left: &Self, right: &Self) -> Result<AllocatedNum<E>, SynthesisError>

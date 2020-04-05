@@ -40,6 +40,14 @@ impl<E: Engine> FriUtilsGadget<E> {
         pow
     }
 
+    pub fn get_domain_size(&self) -> usize {
+        self.domain_size
+    }
+
+    pub fn get_log_domain_size(&self) -> usize {
+        self.log_domain_size
+    }
+
     //wrapping factor here is size of coset: 1 << collapsing_factor
     pub fn new(domain_size: usize, collapsing_factor: usize) -> Self {
         
@@ -107,7 +115,7 @@ impl<E: Engine> FriUtilsGadget<E> {
     pub fn coset_interpolation_value<CS: ConstraintSystem<E>>(
         &self,
         mut cs: CS,
-        coset_values: &[AllocatedNum<E>],
+        coset_values: &[Num<E>],
         coset_tree_idx: &[Boolean],
         // contains alpha, alpha^2, alpha^4, ...
         challenges: &[AllocatedNum<E>],
@@ -117,8 +125,8 @@ impl<E: Engine> FriUtilsGadget<E> {
     ) -> Result<AllocatedNum<E>, SynthesisError> {
 
         let coset_size = self.wrapping_factor;
-        let mut this_level_values : Vec<AllocatedNum<E>> = vec![];
-        let mut next_level_values : Vec<AllocatedNum<E>>;
+        let mut this_level_values : Vec<Num<E>> = vec![];
+        let mut next_level_values : Vec<Num<E>>;
         
         let mut coset_omega_inv = AllocatedNum::pow(
             cs.namespace(|| "get coset specific omega"), 
@@ -168,11 +176,11 @@ impl<E: Engine> FriUtilsGadget<E> {
                     },
                 };
            
-                let mut v_even : Num<E> = f0.clone().into();
-                v_even.mut_add_number_with_coeff(&f1, one.clone());
+                let mut v_even : Num<E> = f0.clone();
+                v_even.add_assign(&f1);
 
-                let mut v_odd : Num<E> = f0.into();
-                v_odd.mut_add_number_with_coeff(&f1, minus_one.clone());
+                let mut v_odd : Num<E> = f0.clone();
+                v_odd.sub_assign(&f1);
                 v_odd = Num::mul_by_var_with_coeff(
                     cs.namespace(|| "scale by coset omega"),
                     &v_odd, 
@@ -196,7 +204,7 @@ impl<E: Engine> FriUtilsGadget<E> {
                         }
                     })?;
 
-                let mut res_num : Num<E> = res.clone().into();
+                let mut res_num : Num<E> = res.into();
                 res_num.scale(self.two.clone());
                 res_num.sub_assign(&v_even);
 
@@ -207,24 +215,26 @@ impl<E: Engine> FriUtilsGadget<E> {
                     &res_num,
                 );
 
-                next_level_values.push(res);
+                next_level_values.push(res_num);
             }
 
             if wrapping_step != self.collapsing_factor - 1 {
                 omega_inv.square();
                 domain_size /= 2;
                 log_domain_size <<= 1;
-                coset_omega_inv = coset_omega_inv.square(cs.namespace(|| "construct next coset_omega"))?;
+                coset_omega_inv = coset_omega_inv.square(cs.namespace(|| "construct next coset omega"))?;
             
                 this_level_values = next_level_values;
             } 
             else {
-                interpolant = next_level_values.into_iter().nth(0);
+                interpolant = next_level_values.into_iter().nth(0).map(|x| x.force_simplify().expect("this Num should be simple"));
             }         
         }
 
         interpolant.ok_or(SynthesisError::Unknown)   
     }
+
+    // fri_helper.get_combiner_eval_points(coset_idx)?;
 }
 
 

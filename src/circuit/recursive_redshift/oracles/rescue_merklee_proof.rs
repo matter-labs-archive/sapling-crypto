@@ -27,7 +27,6 @@ use super::*;
 
 
 pub struct RescueTreeGadgetParams<'a, F: PrimeField, RP: RescueParams<F>> {
-    pub size: usize,
     pub num_elems_per_leaf: usize,
     pub rescue_params: &'a RP,
     pub _marker: std::marker::PhantomData<F>,
@@ -35,8 +34,6 @@ pub struct RescueTreeGadgetParams<'a, F: PrimeField, RP: RescueParams<F>> {
 
 
 pub struct RescueTreeGadget<'a, E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> {
-    size: usize,
-    height: usize,
     num_elems_per_leaf: usize,
     params: &'a RP,
     sbox: SBOX,
@@ -45,23 +42,8 @@ pub struct RescueTreeGadget<'a, E: Engine, RP: RescueParams<E::Fr>, SBOX: Rescue
 
 impl<'a, E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> RescueTreeGadget<'a, E, RP, SBOX> {
 
-    fn log2_floor(num: usize) -> usize {
-        assert!(num > 0);
-        let mut pow: usize = 0;
-
-        while (1 << (pow+1)) <= num {
-            pow += 1;
-        }
-        pow
-    }
-
-    pub fn new_impl(size: usize, num_elems_per_leaf: usize, params: &'a RP, sbox: SBOX) -> Self {
-        assert!(size.is_power_of_two());
-        let height = Self::log2_floor(size);
-
+    pub fn new_impl(num_elems_per_leaf: usize, params: &'a RP, sbox: SBOX) -> Self {
         Self {
-            size,
-            height,
             num_elems_per_leaf,
             params,
             sbox,
@@ -101,12 +83,13 @@ impl<'a, E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> RescueTreeGadg
     fn check_hash_inclusion_with_parsed_path<CS: ConstraintSystem<E>>(
         &self, 
         mut cs: CS,
+        height: usize,
         root: &AllocatedNum<E>, 
         leaf_hash : AllocatedNum<E>,
         path: &[Boolean], 
         witness: &[AllocatedNum<E>]
     ) -> Result<Boolean, SynthesisError> {
-        if self.height != witness.len() {
+        if height != witness.len() {
             return Err(SynthesisError::Unsatisfiable);
         }
 
@@ -150,7 +133,8 @@ impl<'a, E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> RescueTreeGadg
 
     pub fn validate_impl<CS: ConstraintSystem<E>>(
         &self, 
-        mut cs: CS, 
+        mut cs: CS,
+        height: usize, 
         root: &AllocatedNum<E>, 
         elems : &[Num<E>],
         path: &[Boolean], 
@@ -161,6 +145,7 @@ impl<'a, E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> RescueTreeGadg
         let leaf_hash_var = leaf_hash.simplify(cs.namespace(|| "simplification"))?;
         let res = self.check_hash_inclusion_with_parsed_path( 
             cs.namespace(|| "merklee proof"),
+            height,
             root,
             leaf_hash_var,
             path, 
@@ -179,13 +164,14 @@ impl<'a, E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> OracleGadget<E
     type Proof = Vec<AllocatedNum<E>>;
     
 
-    fn new(params: Self::Params) -> Self {
-        Self::new_impl(params.size, params.num_elems_per_leaf, params.rescue_params, SBOX::new())
+    fn new(params: &Self::Params) -> Self {
+        Self::new_impl(params.num_elems_per_leaf, params.rescue_params, SBOX::new())
     }
 
     fn validate<CS: ConstraintSystem<E>>(
         &self, 
-        cs: CS, 
+        cs: CS,
+        height: usize, 
         elems : &[Num<E>],
         path: &[Boolean],
         commitment: &Self::Commitment, 
@@ -193,7 +179,8 @@ impl<'a, E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> OracleGadget<E
     ) -> Result<Boolean, SynthesisError> {
 
         self.validate_impl(
-            cs, 
+            cs,
+            height, 
             commitment, 
             elems,
             path,
@@ -223,6 +210,18 @@ mod test {
 
     use std::iter::FromIterator;
     use super::*;
+
+    pub fn log2_floor(num: usize) -> usize {
+        assert!(num > 0);
+        assert!((num & (num - 1)) == 0);
+
+        let mut pow: usize = 0;
+
+        while (1 << (pow+1)) <= num {
+            pow += 1;
+        }
+        pow
+    }
 
     #[test]
     fn test_rescue_merkle_proof_gadget() {
@@ -268,16 +267,16 @@ mod test {
                 )?;
                 let path = index.into_bits_le(cs.namespace(|| "parse index"))?;
 
-                let gadger_params = RescueTreeGadgetParams {
-                    size: self.size,
+                let tree_params = RescueTreeGadgetParams {
                     num_elems_per_leaf: self.num_elems_per_leaf,
                     rescue_params: &self.rescue_params,
                     _marker: std::marker::PhantomData::<E::Fr>,
                 };
-                let tree = RescueTreeGadget::<E, RP, SBOX>::new(gadger_params);
+                let tree = RescueTreeGadget::<E, RP, SBOX>::new(&tree_params);
 
                 let is_valid = tree.validate(
-                    cs.namespace(|| "test merkle proof"), 
+                    cs.namespace(|| "test merkle proof"),
+                    log2_floor(self.size), 
                     &elems[..], 
                     &path,
                     &root, 

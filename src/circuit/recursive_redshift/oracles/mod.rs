@@ -39,16 +39,25 @@ pub trait OracleGadget<E: Engine> {
     type Proof;
     type Commitment;
 
-    fn new(params: Self::Params) -> Self;
+    fn new(params: &Self::Params) -> Self;
 
     fn validate<CS: ConstraintSystem<E>>(
         &self, 
-        cs: CS, 
+        cs: CS,
+        height: usize, 
         elems : &[Num<E>],
         path: &[Boolean],
         commitment: &Self::Commitment, 
         proof: &Self::Proof,
     ) -> Result<Boolean, SynthesisError>;
+}
+
+// container that holds the values alongside the proof 
+// NB: there is no need to store the index (or path), as it is calculated and checked by verifier
+pub struct Query<E: Engine, O: OracleGadget<E>> {
+    pub values: Vec<AllocatedNum<E>>,
+    pub proof: O::Proof,
+    pub _marker: std::marker::PhantomData<O>,
 }
 
 
