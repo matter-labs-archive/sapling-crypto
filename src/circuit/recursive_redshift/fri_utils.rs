@@ -21,6 +21,7 @@ pub struct FriUtilsGadget<E: Engine> {
     log_domain_size: usize,
     collapsing_factor: usize,
     wrapping_factor: usize,
+    omega: E::Fr,
     omega_inv: E::Fr,
     two: E::Fr,
     two_inv: E::Fr,
@@ -67,6 +68,7 @@ impl<E: Engine> FriUtilsGadget<E> {
             log_domain_size,
             collapsing_factor,
             wrapping_factor: 1<<collapsing_factor,
+            omega,
             omega_inv,
             two,
             two_inv,
@@ -78,7 +80,8 @@ impl<E: Engine> FriUtilsGadget<E> {
     pub fn next_domain(&mut self) {
         self.domain_size >>= self.collapsing_factor;
         self.log_domain_size -= 1;
-        self.omega_inv.double();
+        self.omega.square();
+        self.omega_inv.square();
 
         assert!(self.log_domain_size > 0);
     }
@@ -234,7 +237,20 @@ impl<E: Engine> FriUtilsGadget<E> {
         interpolant.ok_or(SynthesisError::Unknown)   
     }
 
-    // fri_helper.get_combiner_eval_points(coset_idx)?;
+    pub fn get_combiner_eval_point<CS>(coset_tree_idx : &[Boolean]) -> Result<Vec<AllocatedNum<E>>, SynthesisError>
+    where CS: ConstraintSystem<E> {
+
+        // let w - generator of current domain
+        // let coset_idx = |xxxxxx| (bit decomposition)
+        // let coset_omega = w^coset_idx
+        // let g = w^(1000000)
+        // this method returns array [coset_omega * g^bitreverse(i)]
+        
+        
+        
+    }
+
+    fri_helper.get_combiner_eval_points(coset_idx)?;
 }
 
 

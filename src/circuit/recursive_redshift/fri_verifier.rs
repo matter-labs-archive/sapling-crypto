@@ -24,7 +24,7 @@ pub struct FriVerifierGadget<E: Engine, I: OracleGadget<E>> {
 }
 
 pub type Label = &'static str;
-pub type CombinerFunction<E> = dyn Fn(&[(Labeled<&AllocatedNum<E>>)]) -> Result<AllocatedNum<E>, SynthesisError>;
+pub type CombinerFunction<E> = dyn Fn(Vec<Labeled<&Num<E>>>) -> Result<Num<E>, SynthesisError>;
 
 pub struct Labeled<T> {
     pub label: Label,
@@ -55,7 +55,7 @@ impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
    
     ) -> Result<Boolean, SynthesisError>
     {
-        let mut fri_helper = FriUtilsGadget::<E>::new(initial_domain_size, collapsing_factor);
+        let mut fri_helper = FriUtilsGadget::<E>::new(cs.namespace(|| "FRI helper"), initial_domain_size, collapsing_factor);
         let mut coset_idx = fri_helper.get_coset_idx_for_natural_index(natural_first_element_index);
         let coset_size = 1 << collapsing_factor;
 
@@ -96,24 +96,40 @@ impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
         // construction of x_i is held by fri_utils
 
         let mut values = Vec::with_capacity(coset_size);
-        let evaluation_points = fri_helper.get_combiner_eval_points(coset_idx)?;
+        let evaluation_points = fri_helper.get_combiner_eval_points(cs.namespace(|| "find evaluation points"), coset_idx)?;
 
-        
-    // for (i, coset_idx) in coset_idx_range.clone().enumerate() {
-    //         let mut argument : Vec<(Label, &F)> = upper_layer_queries.iter().map(|x| (x.0, &x.1.values()[i])).collect();
-    //         let natural_idx = CosetCombiner::get_natural_idx_for_coset_index(
-    //             coset_idx, initial_domain_size, log_initial_domain_size, collapsing_factor);
-    //         let evaluation_point = omega.pow([natural_idx as u64]);
-    //         argument.push(("evaluation_point", &evaluation_point));
-    //         let combined_value = upper_layer_combiner(argument).ok_or(SynthesisError::AssignmentMissing)?;
-    //         values.push(combined_value);
-    //     }
-        
+        for i in 0..coset_size {
+            let mut labeled_argument : Vec<Labeled<&Num<E>>> = upper_layer_queries.iter().map(|x| {
+                Labeled {label: x.label, data: &x.data.values[i]}
+                }).collect();
+            labeled_argument.push(Labeled {
+                label: "ev_p",
+                data: &evaluation_points[i]
+            });
 
-        // let mut domain_size = initial_domain_size;
-        // let mut log_domain_size = log_initial_domain_size;
-        // let mut elem_index = (natural_first_element_index << collapsing_factor) % domain_size;
-        // let mut omega_inv = omega_inv.clone();
+            let res = upper_layer_combiner(labeled_argument)?;
+            values.push(res);
+        }
+
+        let mut previous_layer_element = fri_helper.coset_interpolation_value(
+            cs.namespace(|| "coset interpolant computation"),
+            &values[..],
+            coset_idx,
+            &fri_challenges[0..coset_size], 
+        )?;
+            
+        for ((query, commitment), challenge) 
+            in queries.into_iter().zip(commitments.iter()).zip(fri_challenges.iter().chunks().skip(1)) 
+        {
+            // adapt fri_helper for smaller domain
+            
+            // let mut domain_size = initial_domain_size;
+            // let mut log_domain_size = log_initial_domain_size;
+            // let mut elem_index = (natural_first_element_index << collapsing_factor) % domain_size;
+            // let mut omega_inv = omega_inv.clone();
+        }
+   
+        
         // let mut previous_layer_element = FriIop::<F, O, C>::coset_interpolant_value(
         //     &values[..],
         //     &fri_challenges[0],
