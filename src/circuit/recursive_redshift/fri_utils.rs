@@ -109,15 +109,15 @@ impl<E: Engine> FriUtilsGadget<E> {
         mut cs: CS,
         coset_values: &[AllocatedNum<E>],
         coset_tree_idx: &[Boolean],
-        supposed_value: &Num<E>,
-        challenge: &AllocatedNum<E>,
+        // contains alpha, alpha^2, alpha^4, ...
+        challenges: &[AllocatedNum<E>],
         // may be it is a dirty Hack(
         // contains inversed generator of the layer of coset vauers
         constrainted_omega_inv: &AllocatedNum<E>,
-    ) -> Result<Boolean, SynthesisError> {
+    ) -> Result<AllocatedNum<E>, SynthesisError> {
 
         let coset_size = self.wrapping_factor;
-        let mut this_level_values : Vec<AllocatedNum<E>>;
+        let mut this_level_values : Vec<AllocatedNum<E>> = vec![];
         let mut next_level_values : Vec<AllocatedNum<E>>;
         
         let mut coset_omega_inv = AllocatedNum::pow(
@@ -129,7 +129,8 @@ impl<E: Engine> FriUtilsGadget<E> {
         let mut omega_inv = self.omega_inv.clone();
         let mut domain_size = self.domain_size;
         let mut log_domain_size = self.log_domain_size;
-        let mut challenge = challenge.clone();
+
+        let mut interpolant : Option<AllocatedNum<E>> = None;
         
         for wrapping_step in 0..self.collapsing_factor {
 
@@ -138,6 +139,8 @@ impl<E: Engine> FriUtilsGadget<E> {
             } else {
                 &this_level_values[..]
             };
+
+            next_level_values = Vec::with_capacity(coset_size >> wrapping_step + 1);
 
             for (pair_idx, pair) in inputs.chunks(2).enumerate() 
             {
@@ -153,7 +156,9 @@ impl<E: Engine> FriUtilsGadget<E> {
                 let one = E::Fr::one();
                 let mut minus_one = one.clone();
                 minus_one.negate();
-                let (f0, f1) = (pair[0], pair[1]);
+
+                let f0 = pair[0].clone();
+                let f1 = pair[1].clone();
 
                 let coef = match pair_idx {
                     0 => one.clone(),
@@ -163,68 +168,62 @@ impl<E: Engine> FriUtilsGadget<E> {
                     },
                 };
            
-                let mut v_even : Num<E> = f0.into();
+                let mut v_even : Num<E> = f0.clone().into();
                 v_even.mut_add_number_with_coeff(&f1, one.clone());
 
                 let mut v_odd : Num<E> = f0.into();
                 v_odd.mut_add_number_with_coeff(&f1, minus_one.clone());
-                v_odd = v_odd.mul_by_var_with_coeff(&coset_omega, coef).into();
+                v_odd = Num::mul_by_var_with_coeff(
+                    cs.namespace(|| "scale by coset omega"),
+                    &v_odd, 
+                    &coset_omega_inv, 
+                    coef
+                )?.into();
 
                 // res = (v_odd * challenge + v_even) * two_inv;
                 // enforce: v_odd * challenge = 2 * res - v_even
                 let res = AllocatedNum::alloc(
                     cs.namespace(|| "FRI round consistency check: allocate next layer"), 
                     || { 
-                        match (v_odd.value(), v_even.value(), challenge.value()) {
+                        match (v_odd.get_value(), v_even.get_value(), challenges[wrapping_step].get_value()) {
                             (Some(mut v_odd), Some(v_even), Some(challenge)) => {
                                 v_odd.mul_assign(&challenge);
                                 v_odd.add_assign(&v_even);
-                                v_odd.add_assign(&two_inv);
-                                Some(v_odd)
+                                v_odd.add_assign(&self.two_inv);
+                                Ok(v_odd)
                             },
-                            (_, _, _) => None,
+                            (_, _, _) => Err(SynthesisError::AssignmentMissing),
                         }
                     })?;
 
-                let mut res_num : Num<E> = res.into();
+                let mut res_num : Num<E> = res.clone().into();
                 res_num.scale(self.two.clone());
                 res_num.sub_assign(&v_even);
 
                 Num::enforce(
                     cs.namespace(|| "FRI round consistency check constraint"),
-                    v_odd,
-                    challenge.into(),
-                    res_num,
+                    &v_odd,
+                    &challenges[wrapping_step].clone().into(),
+                    &res_num,
                 );
 
-                *o = res;
+                next_level_values.push(res);
             }
 
             if wrapping_step != self.collapsing_factor - 1 {
-                this_level_values.clear();
-                this_level_values.clone_from(&next_level_values);
-                challenge.square();
-            }
+                omega_inv.square();
+                domain_size /= 2;
+                log_domain_size <<= 1;
+                coset_omega_inv = coset_omega_inv.square(cs.namespace(|| "construct next coset_omega"))?;
             
-            omega_inv.square();
-            *domain_size /= 2;
-            *log_domain_size <<= 1;
-            *elem_index = (*elem_index << collapsing_factor) % *domain_size;
-
-            // Really?
-            //coset_omega.square()
+                this_level_values = next_level_values;
+            } 
+            else {
+                interpolant = next_level_values.into_iter().nth(0);
+            }         
         }
 
-    let final_res = next_level_values[0]
-
-    let included = AllocatedNum::equals(
-            cs.namespace(|| "compare roots"), 
-            &cur, 
-            &root
-        )?;
-
-        Ok(included)
-    
+        interpolant.ok_or(SynthesisError::Unknown)   
     }
 }
 
