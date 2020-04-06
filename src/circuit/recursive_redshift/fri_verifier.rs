@@ -43,14 +43,14 @@ pub struct FriSingleQueryRoundData<E: Engine, I: OracleGadget<E>> {
     upper_layer_queries: Vec<Labeled<Query<E, I>>>,
     // this structure is modified internally as we simplify Nums during he work of the algorithm
     queries: Vec<Query<E, I>>,
-    natural_first_element_index : usize,
+    natural_first_element_index : Vec<Boolean>,
 }
 
 
 impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
 
     fn verify_single_proof_round<CS: ConstraintSystem<E>>(
-        
+        &self,
         mut cs: CS,
 
         upper_layer_queries: &[Labeled<Query<E, I>>],
@@ -64,14 +64,13 @@ impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
 
         natural_first_element_index: &[Boolean],
         fri_challenges: &[AllocatedNum<E>],
-        
-        initial_domain_size: usize,
-        collapsing_factor: usize,
+
         oracle_params: &I::Params,
    
     ) -> Result<Boolean, SynthesisError>
     {
-
+        
+        let collapsing_factor = fri_helper.get_collapsing_factor();
         let mut natural_index = &natural_first_element_index[..];
         let coset_idx = fri_helper.get_coset_idx_for_natural_index(natural_index);
         let coset_size = 1 << collapsing_factor;
@@ -230,7 +229,7 @@ impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
 
 
     pub fn verify_proof<CS: ConstraintSystem<E>>(
-
+        &self,
         mut cs: CS,
         oracle_params: &I::Params,
         // data that is shared among all Fri query rounds
@@ -246,66 +245,55 @@ impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
         
         // construct global parameters
         let mut final_result = Boolean::Constant(true);
-        let unpacked_fri_challenges : AllocatedNum<E> = Vec::with_capacity(capacity: usize)
+        let mut temp_arr = Vec::with_capacity(self.collapsing_factor * fri_challenges.len());
 
+        let unpacked_fri_challenges = match self.collapsing_factor {
+            1 => &fri_challenges,
+            _ => {
+                for challenge in fri_challenges.iter().cloned() {
+                    let mut cur = challenge.clone();
+                    temp_arr.push(challenge);
+                    for _ in 1..self.collapsing_factor {
+                        cur = cur.square(cs.namespace(|| "square challenge"))?;
+                        temp_arr.push(cur.clone())
+                    }
+                }
+                &temp_arr[..]
+            }
+        };
 
-    //     let mut two = F::one();
-    //     two.double();
+        let num_iters = log2_floor(self.initial_degree_plus_one / self.final_degree_plus_one) / self.collapsing_factor;
 
-    //     let two_inv = two.inverse().ok_or(
-    //         SynthesisError::DivisionByZero
-    //     )?;
+        let mut fri_helper = FriUtilsGadget::new(
+            cs.namespace(|| "Fri Utils constructor"),
+            self.initial_degree_plus_one * self.lde_factor,
+            self.collapsing_factor,
+            num_iters,
+        );
 
-    //     let domain = Domain::<F>::new_for_size((params.initial_degree_plus_one.get() * params.lde_factor) as u64)?;
+        for mut single_round_data in query_rounds_data.into_iter() {
 
-    //     let omega = domain.generator;
-    //     let omega_inv = omega.inverse().ok_or(
-    //         SynthesisError::DivisionByZero
-    //     )?;
+            let flag = self.verify_single_proof_round(
+                cs.namespace(|| "FRI single round verifier"),
+                &single_round_data.upper_layer_queries[..],
+                upper_layer_commitments,
+                upper_layer_combiner,
+                &mut fri_helper,
 
-    //     let collapsing_factor = params.collapsing_factor;
-    //     let coset_size = 1 << collapsing_factor;
-    //     let initial_domain_size = domain.size as usize;
-    //     let log_initial_domain_size = log2_floor(initial_domain_size) as usize;
+                &mut single_round_data.queries[..],
+                commitments,
+                final_coefficients,
 
-    //     if natural_element_indexes.len() != params.R || proof.final_coefficients.len() > params.final_degree_plus_one {
-    //         return Ok(false);
-    //     }
+                &single_round_data.natural_first_element_index[..],
+                &unpacked_fri_challenges[..],
+                oracle_params,
+            )?;
 
-
-        
-    //     for ((round, natural_first_element_index), upper_layer_query) in 
-    //         proof.queries.iter().zip(natural_element_indexes.into_iter()).zip(proof.upper_layer_queries.iter()) {
-            
-    //         let valid = FriIop::<F, O, C>::verify_single_proof_round::<Func>(
-    //             &upper_layer_query,
-    //             &upper_layer_commitments,
-    //             &upper_layer_combiner,
-    //             round,
-    //             &proof.commitments,
-    //             &proof.final_coefficients,
-    //             natural_first_element_index,
-    //             fri_challenges,
-    //             num_steps as usize,
-    //             initial_domain_size,
-    //             log_initial_domain_size,
-    //             collapsing_factor,
-    //             coset_size,
-    //             &oracle_params,
-    //             &omega,
-    //             &omega_inv,
-    //             &two_inv,
-    //         )?;
-
-    //         if !valid {
-    //             return Ok(false);
-    //         }
-    //     }
-
-    //     return Ok(true);
-    // }
+            final_result = Boolean::and(cs.namespace(|| "and"), &final_result, &flag)?;
+        }
 
         Ok(final_result)
     }
 }
 
+   

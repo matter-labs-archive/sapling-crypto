@@ -18,6 +18,17 @@ use crate::circuit::boolean::*;
 use std::iter;
 
 
+fn log2_floor(num: usize) -> usize {
+    assert!(num > 0);
+    let mut pow: usize = 0;
+
+    while (1 << (pow+1)) <= num {
+        pow += 1;
+    }
+    pow
+}
+
+
 pub struct FriUtilsGadget<E: Engine> {
     // these parameters are changed when passing to next domain
     domain_size: usize,
@@ -49,17 +60,10 @@ pub struct FriUtilsGadget<E: Engine> {
 }
 
 
+
+
+
 impl<E: Engine> FriUtilsGadget<E> {
-
-    fn log2_floor(num: usize) -> usize {
-        assert!(num > 0);
-        let mut pow: usize = 0;
-
-        while (1 << (pow+1)) <= num {
-            pow += 1;
-        }
-        pow
-    }
 
     pub fn get_domain_size(&self) -> usize {
         self.domain_size
@@ -67,6 +71,10 @@ impl<E: Engine> FriUtilsGadget<E> {
 
     pub fn get_log_domain_size(&self) -> usize {
         self.log_domain_size
+    }
+
+    pub fn get_collapsing_factor(&self) -> usize {
+        self.collapsing_factor
     }
 
     pub fn get_topmost_layer_omega<CS>(&mut self, mut cs: CS) -> Result<&AllocatedNum<E>, SynthesisError>
@@ -113,7 +121,7 @@ impl<E: Engine> FriUtilsGadget<E> {
     pub fn new<CS: ConstraintSystem<E>>(mut cs: CS, domain_size: usize, collapsing_factor: usize, num_iters: usize) -> Self {
         
         assert!(domain_size.is_power_of_two());
-        let log_domain_size = Self::log2_floor(domain_size);
+        let log_domain_size = log2_floor(domain_size);
 
         let domain = Domain::<E::Fr>::new_for_size(domain_size as u64).expect("should construct");
         let omega = domain.generator;
