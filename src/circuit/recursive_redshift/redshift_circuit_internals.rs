@@ -1,5 +1,3 @@
-use bellman::redshift::IOP::hashes::rescue::{RescueParams};
-
 use bellman::pairing::{
     Engine,
 };
@@ -19,9 +17,9 @@ use bellman::{
 use crate::circuit::num::*;
 use crate::circuit::boolean::*;
 
-use crate::circuit::recursive_redshift::rescue::*;
-use crate::circuit::recursive_redshift::merklee_proof::*;
+use crate::circuit::recursive_redshift::oracles::*;
 use crate::circuit::recursive_redshift::channel::*;
+use crate::circuit::recursive_redshift::fri_verifier::*;
 
 
 struct RedShiftVerifierCircuit<E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> {

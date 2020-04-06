@@ -17,6 +17,16 @@ use bellman::pairing::ff::{
 use crate::circuit::num::*;
 use crate::circuit::boolean::*;
 
+use crate::circuit::recursive_redshift::data_structs::*;
+
+
+pub struct FriSingleQueryRoundData<E: Engine, I: OracleGadget<E>> {   
+    upper_layer_queries: LabeledVec<Query<E, I>>,
+    // this structure is modified internally as we simplify Nums during he work of the algorithm
+    queries: Vec<Query<E, I>>,
+    natural_first_element_index: Vec<Boolean>,
+}
+
 
 pub struct FriVerifierGadget<E: Engine, I: OracleGadget<E>> {
     pub collapsing_factor : usize,
@@ -29,21 +39,6 @@ pub struct FriVerifierGadget<E: Engine, I: OracleGadget<E>> {
 
     _engine_marker : std::marker::PhantomData<E>,
     _oracle_marker : std::marker::PhantomData<I>,
-}
-
-pub type Label = &'static str;
-pub type CombinerFunction<E> = dyn Fn(Vec<Labeled<&Num<E>>>) -> Result<Num<E>, SynthesisError>;
-
-pub struct Labeled<T> {
-    pub label: Label,
-    pub data: T,
-}
-
-pub struct FriSingleQueryRoundData<E: Engine, I: OracleGadget<E>> {   
-    upper_layer_queries: Vec<Labeled<Query<E, I>>>,
-    // this structure is modified internally as we simplify Nums during he work of the algorithm
-    queries: Vec<Query<E, I>>,
-    natural_first_element_index : Vec<Boolean>,
 }
 
 
