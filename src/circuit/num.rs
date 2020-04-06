@@ -41,6 +41,13 @@ impl<E: Engine> Clone for AllocatedNum<E> {
 }
 
 impl<E: Engine> AllocatedNum<E> {
+    pub fn default<CS: ConstraintSystem<E>>() -> Self {
+        AllocatedNum {
+            value: Some(E::Fr::one()),
+            variable: CS::one(),
+        }
+    }
+
     pub fn alloc<CS, F>(
         mut cs: CS,
         value: F,
@@ -678,11 +685,12 @@ impl<E: Engine> AllocatedNum<E> {
     }
 
     // Montgomery double and add algorithm
-    pub fn pow<CS: ConstraintSystem<E>>(mut cs: CS, base: &Self, x: &[Boolean]) -> Result<Self, SynthesisError> {
-        
+    pub fn pow<'a, CS, I>(mut cs: CS, base: &Self, x: I) -> Result<Self, SynthesisError> 
+    where CS: ConstraintSystem<E>, I: DoubleEndedIterator<Item = &'a Boolean> 
+    {
         let mut r0 = Self::from_var(CS::one(), Some(E::Fr::one()));
         let mut r1 = base.clone();
-        for b in x.iter().rev() {
+        for b in x.rev() {
             // RO = RO * R1 if b == 1 else R0^2
             // R1 = R1^2 if b == 1 else R0 * R1
             let r0_squared = r0.square(cs.namespace(|| "square R0"))?;

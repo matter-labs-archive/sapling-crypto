@@ -41,8 +41,9 @@ impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
         upper_layer_queries: &[Labeled<Query<E, I>>],
         upper_layer_commitments: &[Labeled<I::Commitment>], 
         upper_layer_combiner: &CombinerFunction<E>,
+        fri_helper: &mut FriUtilsGadget<E>,
 
-        queries: &[Query<E, I>],
+        queries: &mut [Query<E, I>],
         commitments: &[I::Commitment],
         final_coefficients: &[AllocatedNum<E>],
 
@@ -55,9 +56,9 @@ impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
    
     ) -> Result<Boolean, SynthesisError>
     {
-        let mut fri_helper = FriUtilsGadget::<E>::new(cs.namespace(|| "FRI helper"), initial_domain_size, collapsing_factor);
+
         let mut natural_index = &natural_first_element_index[..];
-        let mut coset_idx = fri_helper.get_coset_idx_for_natural_index(natural_index);
+        let coset_idx = fri_helper.get_coset_idx_for_natural_index(natural_index);
         let coset_size = 1 << collapsing_factor;
 
         // check oracle proof for each element in the upper layer!
@@ -80,7 +81,7 @@ impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
 
             final_result = Boolean::and(cs.namespace(|| "and"), &final_result, &oracle_check)?;
         }
-      
+
         // apply combiner function in order to conduct Fri round consistecy check
         // with respect to the topmost layer
         // let n be the size of coset
@@ -97,9 +98,13 @@ impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
         // construction of x_i is held by fri_utils
 
         let mut values = Vec::with_capacity(coset_size);
-        let evaluation_points = fri_helper.get_combiner_eval_points(cs.namespace(|| "find evaluation points"), coset_idx)?;
+        let evaluation_points = fri_helper.get_combiner_eval_points(
+            cs.namespace(|| "find evaluation points"), 
+            coset_idx.iter()
+        )?;
 
         for i in 0..coset_size {
+
             let mut labeled_argument : Vec<Labeled<&Num<E>>> = upper_layer_queries.iter().map(|x| {
                 Labeled {label: x.label, data: &x.data.values[i]}
                 }).collect();
@@ -115,11 +120,11 @@ impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
         let mut previous_layer_element = fri_helper.coset_interpolation_value(
             cs.namespace(|| "coset interpolant computation"),
             &values[..],
-            coset_idx,
+            coset_idx.iter(),
             &fri_challenges[0..coset_size], 
         )?;
-            
-        for ((query, commitment), challenge) 
+
+        for ((mut query, commitment), challenges) 
             in queries.into_iter().zip(commitments.iter()).zip(fri_challenges.chunks(coset_size).skip(1)) 
         {
             // adapt fri_helper for smaller domain
@@ -127,46 +132,78 @@ impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
 
             // new natural_elem_index = (old_natural_element_index << collapsing_factor) % domain_size
             natural_index = &natural_index[collapsing_factor..fri_helper.get_log_domain_size()];
-            let (coset_idx, offset) = fri_helper.get_coset_idx_for_natural_index_extended(natural_index);
+            let coset_idx = fri_helper.get_coset_idx_for_natural_index(natural_index);
+            let offset = fri_helper.get_coset_offset_for_natural_index(natural_index);
 
             // oracle proof for current layer!
-
             let oracle_check = oracle.validate(
                 cs.namespace(|| "Oracle proof"),
                 fri_helper.get_log_domain_size(),
-                &query.data.values, 
+                &query.values, 
                 coset_idx,
                 commitment, 
-                &labeled_query.data.proof, 
+                &query.proof, 
             )?;
 
             final_result = Boolean::and(cs.namespace(|| "and"), &final_result, &oracle_check)?;
-            
-        }
-        
-                
-        //     <O as Oracle<F>>::verify_query(commitment, query, &oracle_params);
-            
-        //     //round consistency check
-        //     let this_layer_element = FriIop::<F, O, C>::coset_interpolant_value(
-        //         query.values(),
-        //         &challenge,
-        //         coset_idx_range,
-        //         collapsing_factor,
-        //         coset_size,
-        //         &mut domain_size,
-        //         &mut log_domain_size,
-        //         &mut elem_index,
-        //         & mut omega_inv,
-        //         two_inv);
-         
-        //     if previous_layer_element != query.values()[elem_tree_idx] {
-        //         return Ok(false);
-        //     }
-        //     previous_layer_element = this_layer_element;
-        // }
 
-        // // finally we need to get expected value from coefficients
+            // round consistency check (rcc) : previous layer element interpolant has already been stored
+            // compare it with current layer element (which is chosen from query values by offset)
+            let cur_layer_element = fri_helper.choose_element_in_coset(
+                cs.namespace(|| "choose element from coset by index"),
+                &mut query.values[..],
+                offset,
+            )?; 
+            let rcc_flag = AllocatedNum::equals(
+                cs.namespace(|| "FRI round consistency check"), 
+                &previous_layer_element, 
+                &cur_layer_element,
+            )?;
+            final_result = Boolean::and(cs.namespace(|| "and"), &final_result, &rcc_flag)?;
+
+            //recompute interpolant (using current layer for now) 
+            //and store it for use on the next iteration (or for final check)
+            fri_helper.coset_interpolation_value(
+                cs.namespace(|| "coset interpolant computation"),
+                &query.values[..],
+                coset_idx.iter(),
+                &fri_challenges, 
+            )?;
+        }
+
+        // finally we compare the last interpolant with the value f(\omega), 
+        // where f is built from coefficients
+
+        assert!(final_coefficients.len() > 0);
+        let val = if final_coefficients.len() == 1 {
+            // if len is 1 there is no need to create additional omega with constraint overhea
+            final_coefficients[0]
+        }
+        else {
+
+            fri_helper.next_domain(cs.namespace(|| "shrink domain to final layer"));
+            natural_index = &natural_index[collapsing_factor..fri_helper.get_log_domain_size()];
+            let omega = fri_helper.get_bottom_layer_omega(cs.namespace(|| "final layer generator"));
+            let mut ev_p = AllocatedNum::pow(
+                cs.namespace(|| "poly eval: evaluation point"), 
+                &omega, 
+                natural_index,
+            )?;
+            let mut running_sum = Num::from_constant(final_coefficients[0], cs.namespace(|| "poly eval: running sum"));
+
+            for c in final_coefficients.iter().skip(1) {
+
+                pub fn mul<CS>(
+        &self,
+        mut cs: CS,
+        other: &Self
+
+                running_sum.mut_add_number_with_coeff(variable: &AllocatedNum<E>, coeff: E::Fr)
+            }
+        }
+
+
+
         // let mut expected_value_from_coefficients = F::zero();
         // let mut power = F::one();
         // let evaluation_point = omega.pow([elem_index as u64]);
@@ -179,14 +216,9 @@ impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
         // }
         // Ok(expected_value_from_coefficients == previous_layer_element)
 
-        Ok(result)
+        Ok(final_result)
     }
 }
-
-
-    
-
-
 
 
 // pub fn verify_proof_queries<Func: Fn(Vec<(Label, &F)>) -> Option<F>>(
@@ -226,8 +258,7 @@ impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
 //             return Ok(false);
 //         }
 
-//         let num_steps = 
-//             log2_floor(params.initial_degree_plus_one.get() / params.final_degree_plus_one) / params.collapsing_factor as u32;
+
         
 //         for ((round, natural_first_element_index), upper_layer_query) in 
 //             proof.queries.iter().zip(natural_element_indexes.into_iter()).zip(proof.upper_layer_queries.iter()) {

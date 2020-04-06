@@ -55,7 +55,7 @@ pub trait OracleGadget<E: Engine> {
 // container that holds the values alongside the proof 
 // NB: there is no need to store the index (or path), as it is calculated and checked by verifier
 pub struct Query<E: Engine, O: OracleGadget<E>> {
-    pub values: Vec<AllocatedNum<E>>,
+    pub values: Vec<Num<E>>,
     pub proof: O::Proof,
     pub _marker: std::marker::PhantomData<O>,
 }
