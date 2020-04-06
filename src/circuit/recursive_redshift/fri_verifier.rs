@@ -19,6 +19,14 @@ use crate::circuit::boolean::*;
 
 
 pub struct FriVerifierGadget<E: Engine, I: OracleGadget<E>> {
+    pub collapsing_factor : usize,
+    //number of iterations done during FRI query phase
+    pub num_query_rounds : usize,
+    pub initial_degree_plus_one : usize,
+    pub lde_factor: usize,
+    //the degree of the resulting polynomial at the bottom level of FRI
+    pub final_degree_plus_one : usize,
+
     _engine_marker : std::marker::PhantomData<E>,
     _oracle_marker : std::marker::PhantomData<I>,
 }
@@ -31,10 +39,17 @@ pub struct Labeled<T> {
     pub data: T,
 }
 
+pub struct FriSingleQueryRoundData<E: Engine, I: OracleGadget<E>> {   
+    upper_layer_queries: Vec<Labeled<Query<E, I>>>,
+    // this structure is modified internally as we simplify Nums during he work of the algorithm
+    queries: Vec<Query<E, I>>,
+    natural_first_element_index : usize,
+}
+
 
 impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
 
-    pub fn verify_single_proof_round<CS: ConstraintSystem<E>>(
+    fn verify_single_proof_round<CS: ConstraintSystem<E>>(
         
         mut cs: CS,
 
@@ -124,7 +139,7 @@ impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
             &fri_challenges[0..coset_size], 
         )?;
 
-        for ((mut query, commitment), challenges) 
+        for ((query, commitment), challenges) 
             in queries.into_iter().zip(commitments.iter()).zip(fri_challenges.chunks(coset_size).skip(1)) 
         {
             // adapt fri_helper for smaller domain
@@ -163,7 +178,7 @@ impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
 
             //recompute interpolant (using current layer for now) 
             //and store it for use on the next iteration (or for final check)
-            fri_helper.coset_interpolation_value(
+            previous_layer_element = fri_helper.coset_interpolation_value(
                 cs.namespace(|| "coset interpolant computation"),
                 &query.values[..],
                 coset_idx.iter(),
@@ -177,116 +192,120 @@ impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
         assert!(final_coefficients.len() > 0);
         let val = if final_coefficients.len() == 1 {
             // if len is 1 there is no need to create additional omega with constraint overhea
-            final_coefficients[0]
+            final_coefficients[0].clone()
         }
         else {
 
             fri_helper.next_domain(cs.namespace(|| "shrink domain to final layer"));
             natural_index = &natural_index[collapsing_factor..fri_helper.get_log_domain_size()];
-            let omega = fri_helper.get_bottom_layer_omega(cs.namespace(|| "final layer generator"));
-            let mut ev_p = AllocatedNum::pow(
+            let omega = fri_helper.get_bottom_layer_omega(cs.namespace(|| "final layer generator"))?;
+            let ev_p = AllocatedNum::pow(
                 cs.namespace(|| "poly eval: evaluation point"), 
-                &omega, 
-                natural_index,
+                omega, 
+                natural_index.iter(),
             )?;
-            let mut running_sum = Num::from_constant(final_coefficients[0], cs.namespace(|| "poly eval: running sum"));
+
+            let mut t = ev_p.clone();
+            let mut running_sum : Num<E> = final_coefficients[0].clone().into();
 
             for c in final_coefficients.iter().skip(1) {
 
-                pub fn mul<CS>(
-        &self,
-        mut cs: CS,
-        other: &Self
-
-                running_sum.mut_add_number_with_coeff(variable: &AllocatedNum<E>, coeff: E::Fr)
+                let term = t.mul(cs.namespace(|| "next term"), c)?;
+                t = t.mul(cs.namespace(|| "t^i"), &ev_p)?;
+                running_sum.mut_add_number_with_coeff(&term, E::Fr::one());
             }
-        }
+
+            running_sum.simplify(cs.namespace(|| "simplification of running sum"))?
+        };
+
+        let flag = AllocatedNum::equals(
+            cs.namespace(|| "FRI final round consistency check"), 
+            &previous_layer_element, 
+            &val,
+        )?;
+        final_result = Boolean::and(cs.namespace(|| "and"), &final_result, &flag)?;
+
+        Ok(final_result)
+    }
 
 
+    pub fn verify_proof<CS: ConstraintSystem<E>>(
 
-        // let mut expected_value_from_coefficients = F::zero();
-        // let mut power = F::one();
-        // let evaluation_point = omega.pow([elem_index as u64]);
+        mut cs: CS,
+        oracle_params: &I::Params,
+        // data that is shared among all Fri query rounds
+        upper_layer_combiner: &CombinerFunction<E>,
+        upper_layer_commitments: &[Labeled<I::Commitment>],
+        commitments: &[I::Commitment],
+        final_coefficients: &[AllocatedNum<E>],
+        fri_challenges: &[AllocatedNum<E>], 
 
-        // for c in final_coefficients.iter() {
-        //     let mut tmp = power;
-        //     tmp.mul_assign(c);
-        //     expected_value_from_coefficients.add_assign(&tmp);
-        //     power.mul_assign(&evaluation_point);
-        // }
-        // Ok(expected_value_from_coefficients == previous_layer_element)
+        query_rounds_data: Vec<FriSingleQueryRoundData<E, I>>,
+    ) -> Result<Boolean, SynthesisError> 
+    {
+        
+        // construct global parameters
+        let mut final_result = Boolean::Constant(true);
+        let unpacked_fri_challenges : AllocatedNum<E> = Vec::with_capacity(capacity: usize)
+
+
+    //     let mut two = F::one();
+    //     two.double();
+
+    //     let two_inv = two.inverse().ok_or(
+    //         SynthesisError::DivisionByZero
+    //     )?;
+
+    //     let domain = Domain::<F>::new_for_size((params.initial_degree_plus_one.get() * params.lde_factor) as u64)?;
+
+    //     let omega = domain.generator;
+    //     let omega_inv = omega.inverse().ok_or(
+    //         SynthesisError::DivisionByZero
+    //     )?;
+
+    //     let collapsing_factor = params.collapsing_factor;
+    //     let coset_size = 1 << collapsing_factor;
+    //     let initial_domain_size = domain.size as usize;
+    //     let log_initial_domain_size = log2_floor(initial_domain_size) as usize;
+
+    //     if natural_element_indexes.len() != params.R || proof.final_coefficients.len() > params.final_degree_plus_one {
+    //         return Ok(false);
+    //     }
+
+
+        
+    //     for ((round, natural_first_element_index), upper_layer_query) in 
+    //         proof.queries.iter().zip(natural_element_indexes.into_iter()).zip(proof.upper_layer_queries.iter()) {
+            
+    //         let valid = FriIop::<F, O, C>::verify_single_proof_round::<Func>(
+    //             &upper_layer_query,
+    //             &upper_layer_commitments,
+    //             &upper_layer_combiner,
+    //             round,
+    //             &proof.commitments,
+    //             &proof.final_coefficients,
+    //             natural_first_element_index,
+    //             fri_challenges,
+    //             num_steps as usize,
+    //             initial_domain_size,
+    //             log_initial_domain_size,
+    //             collapsing_factor,
+    //             coset_size,
+    //             &oracle_params,
+    //             &omega,
+    //             &omega_inv,
+    //             &two_inv,
+    //         )?;
+
+    //         if !valid {
+    //             return Ok(false);
+    //         }
+    //     }
+
+    //     return Ok(true);
+    // }
 
         Ok(final_result)
     }
 }
 
-
-// pub fn verify_proof_queries<Func: Fn(Vec<(Label, &F)>) -> Option<F>>(
-//         proof: &FriProof<F, O>,
-//         upper_layer_commitments: Vec<(Label, O::Commitment)>,
-//         natural_element_indexes: Vec<usize>,
-//         fri_challenges: &[F],
-//         params: &FriParams,
-//         oracle_params: &O::Params,
-//         upper_layer_combiner: Func,
-//     ) -> Result<bool, SynthesisError> {
-
-//         assert!(fri_challenges.len() == proof.commitments.len());
-//         assert!(proof.queries.len() == params.R);
-//         assert!(natural_element_indexes.len() == proof.queries.len());
-
-//         let mut two = F::one();
-//         two.double();
-
-//         let two_inv = two.inverse().ok_or(
-//             SynthesisError::DivisionByZero
-//         )?;
-
-//         let domain = Domain::<F>::new_for_size((params.initial_degree_plus_one.get() * params.lde_factor) as u64)?;
-
-//         let omega = domain.generator;
-//         let omega_inv = omega.inverse().ok_or(
-//             SynthesisError::DivisionByZero
-//         )?;
-
-//         let collapsing_factor = params.collapsing_factor;
-//         let coset_size = 1 << collapsing_factor;
-//         let initial_domain_size = domain.size as usize;
-//         let log_initial_domain_size = log2_floor(initial_domain_size) as usize;
-
-//         if natural_element_indexes.len() != params.R || proof.final_coefficients.len() > params.final_degree_plus_one {
-//             return Ok(false);
-//         }
-
-
-        
-//         for ((round, natural_first_element_index), upper_layer_query) in 
-//             proof.queries.iter().zip(natural_element_indexes.into_iter()).zip(proof.upper_layer_queries.iter()) {
-            
-//             let valid = FriIop::<F, O, C>::verify_single_proof_round::<Func>(
-//                 &upper_layer_query,
-//                 &upper_layer_commitments,
-//                 &upper_layer_combiner,
-//                 round,
-//                 &proof.commitments,
-//                 &proof.final_coefficients,
-//                 natural_first_element_index,
-//                 fri_challenges,
-//                 num_steps as usize,
-//                 initial_domain_size,
-//                 log_initial_domain_size,
-//                 collapsing_factor,
-//                 coset_size,
-//                 &oracle_params,
-//                 &omega,
-//                 &omega_inv,
-//                 &two_inv,
-//             )?;
-
-//             if !valid {
-//                 return Ok(false);
-//             }
-//         }
-
-//         return Ok(true);
-//     }

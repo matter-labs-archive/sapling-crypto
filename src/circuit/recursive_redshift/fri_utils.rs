@@ -72,42 +72,37 @@ impl<E: Engine> FriUtilsGadget<E> {
     pub fn get_topmost_layer_omega<CS>(&mut self, mut cs: CS) -> Result<&AllocatedNum<E>, SynthesisError>
     where CS: ConstraintSystem<E> 
     {
-        let res = match (self.layer, self.constrainted_top_level_omega) {
-            // we are on top level, omega is already initialised - just return it
-            (0, Some(x)) => Ok(&x),
-            // we are on top level, but omega is not yet initialized - initialize and return
-            (0, None) => {
-                self.constrainted_top_level_omega = Some(AllocatedNum::alloc(
-                    cs.namespace(|| "constrainted top-level omega"), 
-                    || {Ok(self.omega.clone())}
-                ).expect("should create"));
-                self.constrainted_top_level_omega.as_ref().ok_or(SynthesisError::Unknown)
-            },
-            // we are on the wrong leven
-            (_, _) => Err(SynthesisError::Unknown),
-        };
-        res    
+        if self.layer != 0 {
+            return Err(SynthesisError::Unknown);
+        }
+
+        let val = self.omega.clone();
+        let res = self.constrainted_top_level_omega.get_or_insert_with(|| {
+            AllocatedNum::alloc(
+                cs.namespace(|| "constrainted top-level omega"), 
+                || {Ok(val)}
+            ).expect("should create")
+        });
+
+        Ok(res)   
     }
 
     pub fn get_bottom_layer_omega<CS>(&mut self, mut cs: CS) -> Result<&AllocatedNum<E>, SynthesisError>
     where CS: ConstraintSystem<E> 
     {
-        let final_level = self.num_iters - 1;
-        let res = match (self.layer, self.constrainted_bottom_level_omega) {
-            // we are on top level, omega is already initialised - just return it
-            (final_level, Some(x)) => Ok(&x),
-            // we are on top level, but omega is not yet initialized - initialize and return
-            (final_level, None) => {
-                self.constrainted_bottom_level_omega = Some(AllocatedNum::alloc(
-                    cs.namespace(|| "constrainted top-level omega"), 
-                    || {Ok(self.omega.clone())}
-                ).expect("should create"));
-                self.constrainted_bottom_level_omega.as_ref().ok_or(SynthesisError::Unknown)
-            },
-            // we are on the wrong leven
-            (_, _) => Err(SynthesisError::Unknown),
-        };
-        res    
+        if self.layer != self.num_iters - 1 {
+            return Err(SynthesisError::Unknown);
+        }
+
+        let val = self.omega.clone();
+        let res = self.constrainted_bottom_level_omega.get_or_insert_with(|| {
+            AllocatedNum::alloc(
+                cs.namespace(|| "constrainted top-level omega"), 
+                || {Ok(val)}
+            ).expect("should create")
+        });
+
+        Ok(res)  
     }
 
     pub fn get_cur_layer_omega_inv(&self) -> &AllocatedNum<E> {
