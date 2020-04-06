@@ -70,6 +70,16 @@ impl<E: Engine> AllocatedNum<E> {
         })
     }
 
+    pub fn alloc2<CS: ConstraintSystem<E>>(mut cs: CS, value: Option<E::Fr>) -> Result<Self, SynthesisError> {
+
+        let variable = cs.alloc(|| "num", || value.ok_or(SynthesisError::AssignmentMissing))?;
+
+        Ok(AllocatedNum {
+            value,
+            variable
+        })
+    }
+
     pub fn alloc_input<CS, F>(
         mut cs: CS,
         value: F,
