@@ -14,19 +14,9 @@ use bellman::redshift::domains::*;
 
 use crate::circuit::num::*;
 use crate::circuit::boolean::*;
+use crate::circuit::recursive_redshift::data_structs::log2_floor;
 
 use std::iter;
-
-
-fn log2_floor(num: usize) -> usize {
-    assert!(num > 0);
-    let mut pow: usize = 0;
-
-    while (1 << (pow+1)) <= num {
-        pow += 1;
-    }
-    pow
-}
 
 
 pub struct FriUtilsGadget<E: Engine> {
@@ -58,9 +48,6 @@ pub struct FriUtilsGadget<E: Engine> {
 
     _marker: std::marker::PhantomData<E>,
 }
-
-
-
 
 
 impl<E: Engine> FriUtilsGadget<E> {

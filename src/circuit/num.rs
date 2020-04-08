@@ -41,12 +41,12 @@ impl<E: Engine> Clone for AllocatedNum<E> {
 }
 
 impl<E: Engine> AllocatedNum<E> {
-    pub fn default<CS: ConstraintSystem<E>>() -> Self {
-        AllocatedNum {
-            value: Some(E::Fr::one()),
-            variable: CS::one()
-        }
-    }
+    // pub fn default<CS: ConstraintSystem<E>>() -> Self {
+    //     AllocatedNum {
+    //         value: Some(E::Fr::one()),
+    //         variable: CS::one()
+    //     }
+    // }
 
     pub fn alloc<CS, F>(
         mut cs: CS,
