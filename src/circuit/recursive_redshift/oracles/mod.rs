@@ -18,7 +18,7 @@ use std::marker::PhantomData;
 
 use crate::circuit::num::*;
 use crate::circuit::boolean::*;
-use crate::circuit::recursive_redshift::redshift_data_structs::*;
+use crate::circuit::recursive_redshift::data_structs::*;
 
 pub mod rescue_merklee_proof;
 
@@ -39,8 +39,9 @@ pub fn log2_floor(num: usize) -> usize {
 
 pub trait OracleGadget<E: Engine> {
     type Params;
-    type Proof : FromStream<E>;
-    type Commitment : FromStream<E>;
+    // additional paramter for parser is the height of the tree
+    type Proof : FromStream<E, usize>;
+    type Commitment : FromStream<E, usize>;
 
     fn new(params: &Self::Params) -> Self;
 

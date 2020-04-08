@@ -20,13 +20,6 @@ use crate::circuit::boolean::*;
 use crate::circuit::recursive_redshift::data_structs::*;
 
 
-pub struct FriSingleQueryRoundData<E: Engine, I: OracleGadget<E>> {   
-    upper_layer_queries: LabeledVec<Query<E, I>>,
-    // this structure is modified internally as we simplify Nums during he work of the algorithm
-    queries: Vec<Query<E, I>>,
-    natural_first_element_index: Vec<Boolean>,
-}
-
 
 pub struct FriVerifierGadget<E: Engine, I: OracleGadget<E>> {
     pub collapsing_factor : usize,
@@ -232,7 +225,8 @@ impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
         upper_layer_commitments: &[Labeled<I::Commitment>],
         commitments: &[I::Commitment],
         final_coefficients: &[AllocatedNum<E>],
-        fri_challenges: &[AllocatedNum<E>], 
+        fri_challenges: &[AllocatedNum<E>],
+        natural_first_element_indexes: Vec<Vec<Boolean>>, 
 
         query_rounds_data: Vec<FriSingleQueryRoundData<E, I>>,
     ) -> Result<Boolean, SynthesisError> 
@@ -266,7 +260,8 @@ impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
             num_iters,
         );
 
-        for mut single_round_data in query_rounds_data.into_iter() {
+        for (mut single_round_data, natural_first_element_index) in 
+            query_rounds_data.into_iter().zip(natural_first_element_indexes) {
 
             let flag = self.verify_single_proof_round(
                 cs.namespace(|| "FRI single round verifier"),
@@ -279,7 +274,7 @@ impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
                 commitments,
                 final_coefficients,
 
-                &single_round_data.natural_first_element_index[..],
+                &natural_first_element_index[..],
                 &unpacked_fri_challenges[..],
                 oracle_params,
             )?;
