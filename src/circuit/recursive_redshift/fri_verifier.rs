@@ -20,7 +20,6 @@ use crate::circuit::boolean::*;
 use crate::circuit::recursive_redshift::data_structs::*;
 
 
-
 pub struct FriVerifierGadget<E: Engine, I: OracleGadget<E>> {
     pub collapsing_factor : usize,
     //number of iterations done during FRI query phase
@@ -46,7 +45,7 @@ impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
         upper_layer_combiner: &CombinerFunction<E>,
         fri_helper: &mut FriUtilsGadget<E>,
 
-        queries: &mut [Query<E, I>],
+        queries: &[Query<E, I>],
         commitments: &[I::Commitment],
         final_coefficients: &[AllocatedNum<E>],
 
@@ -107,15 +106,11 @@ impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
 
         for i in 0..coset_size {
 
-            let mut labeled_argument : Vec<Labeled<&Num<E>>> = upper_layer_queries.iter().map(|x| {
-                Labeled {label: x.label, data: &x.data.values[i]}
+            let labeled_argument : Vec<Labeled<&AllocatedNum<E>>> = upper_layer_queries.iter().map(|x| {
+                Labeled::new(x.label, &x.data.values[i])
                 }).collect();
-            labeled_argument.push(Labeled {
-                label: "ev_p",
-                data: &evaluation_points[i]
-            });
 
-            let res = upper_layer_combiner(labeled_argument)?;
+            let res = upper_layer_combiner(labeled_argument, &evaluation_points[i])?;
             values.push(res);
         }
 
@@ -153,7 +148,7 @@ impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
             // compare it with current layer element (which is chosen from query values by offset)
             let cur_layer_element = fri_helper.choose_element_in_coset(
                 cs.namespace(|| "choose element from coset by index"),
-                &mut query.values[..],
+                &query.values[..],
                 offset,
             )?; 
             let rcc_flag = AllocatedNum::equals(

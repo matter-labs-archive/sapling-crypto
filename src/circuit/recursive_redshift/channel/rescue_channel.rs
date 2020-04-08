@@ -21,7 +21,7 @@ where E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>
         }
     }
 
-    fn consume<CS: ConstraintSystem<E>>(&mut self, data: Num<E>, cs: CS) -> Result<(), SynthesisError> {      
+    fn consume<CS: ConstraintSystem<E>>(&mut self, data: AllocatedNum<E>, cs: CS) -> Result<(), SynthesisError> {      
         self.state.absorb(data, cs, self.params)
     }
 

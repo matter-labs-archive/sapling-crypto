@@ -263,6 +263,7 @@ impl<E: Engine, O: OracleGadget<E>> FromStream<E, FriParams> for BatchedFriProof
                 cur_height,
             )?;
             commitments.push(commitment);
+            cur_height -= fri_params.collapsing_factor;
         }
 
         let final_coefficients = 
@@ -271,7 +272,7 @@ impl<E: Engine, O: OracleGadget<E>> FromStream<E, FriParams> for BatchedFriProof
         let mut fri_round_queries = Vec::with_capacity(fri_params.R);
         for _ in 0..fri_params.R {
             let fri_round = FriSingleQueryRoundData::from_stream(
-                cs.namespace(|| "FRI round query"), iter, fri_params)?;
+                cs.namespace(|| "FRI round query"), iter, fri_params.clone())?;
             fri_round_queries.push(fri_round);
         }
         
@@ -297,20 +298,38 @@ impl<E: Engine, O: OracleGadget<E>> FromStream<E, FriParams> for RedshiftProof<E
             "s_id", "sigma_1", "sigma_2", "sigma_3", "z_1", "z_2", "z_1_shifted", "z_2_shifted",
             "t_low", "t_mid", "t_high"];
 
-        let mut upper_layer_queries = Vec::with_capacity(labels.len());
+        let mut opening_values = Vec::with_capacity(labels.len());
 
         for label in labels.iter() {
             let elem = Labeled::new(
-                label, 
-                Query::from_stream(cs.namespace(|| "upper_layer_query"), iter, (coset_size, top_leve_height))?,
+                label,
+                AllocatedNum::from_stream(cs.namespace(|| "opening values"), iter, ())?,
             );
-            upper_layer_queries.push(elem);
+        
+            opening_values.push(elem);
         }
 
-        pub opening_values: LabeledVec<AllocatedNum<E>>,
+        let coset_size = 1 << fri_params.collapsing_factor;
+        let top_level_oracle_size = (fri_params.initial_degree_plus_one.get() * fri_params.lde_factor) / coset_size;
+        let height = log2_floor(top_level_oracle_size);
+
         // contains commitments for a, b, c, z_1, z_2, t_low, t_mid, t_high
-        pub commitments: LabeledVec<I::Commitment>,
-        pub fri_proof: BatchedFriProof<E, I>,
-        
+        let labels = ["a", "b", "c", "z_1", "z_2", "t_low", "t_mid", "t_high"];
+        let mut commitments = Vec::with_capacity(labels.len());
+        for label in labels.iter() {
+            let elem = Labeled::new(
+                label,
+                O::Commitment::from_stream(cs.namespace(|| "commitments to witness polys"), iter, height)?,
+            );
+            commitments.push(elem);
+        }
+
+        let fri_proof = BatchedFriProof::from_stream(
+            cs.namespace(|| "batched FRI proof"), 
+            iter, 
+            fri_params,
+        )?;
+
+        Ok(RedshiftProof { opening_values, commitments, fri_proof })
     }
 }

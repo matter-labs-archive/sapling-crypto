@@ -166,8 +166,9 @@ impl<E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> RescueGadget<E, RP
         }
     }
    
-    pub fn absorb<CS: ConstraintSystem<E>>(&mut self, val: Num<E>, mut cs: CS, params: &RP) -> Result<(), SynthesisError> {
+    pub fn absorb<CS: ConstraintSystem<E>>(&mut self, val: AllocatedNum<E>, mut cs: CS, params: &RP) -> Result<(), SynthesisError> {
         let SPONGE_STATE = params.r();
+        let val = val.into();
         match self.sponge {
             SpongeState::Absorbing(ref mut input) => {
                 if input.len() < SPONGE_STATE {
@@ -202,7 +203,8 @@ impl<E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> RescueGadget<E, RP
                 SpongeState::Squeezing(ref mut output) => {
                     for entry in output.iter_mut() {
                         if let Some(e) = entry.take() {
-                            return Ok(e);
+                            //e.simplify(cs.namespace(|| "simplification"))
+                            return Ok(e)
                         }
                     }
                     // We've already squeezed out all available elements

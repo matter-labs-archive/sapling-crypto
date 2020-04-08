@@ -12,8 +12,10 @@ use bellman::{
     SynthesisError,
     ConstraintSystem,
     LinearCombination,
-    Variable
+    Variable,
+    Namespace,
 };
+use bellman::redshift::IOP::FRI::coset_combining_fri::FriParams;
 
 use crate::circuit::num::*;
 use crate::circuit::boolean::*;
@@ -22,161 +24,129 @@ use crate::circuit::recursive_redshift::oracles::*;
 use crate::circuit::recursive_redshift::channel::*;
 use crate::circuit::recursive_redshift::fri_verifier::*;
 
+use super::data_structs::*;
+
+// TODO: FriParams are copyable - stop clonning!
+
+pub fn find_by_label<'a, X>(label: Label, arr: &'a Vec<Labeled<X>>) -> Result<&'a X, SynthesisError> {
+
+    arr.iter().find(|elem| elem.label == label).map(|elem| &elem.data).ok_or(SynthesisError::Unknown)
+}
+
+pub fn unnamed<'a, E: Engine, CS: ConstraintSystem<E>>(cs: &'a mut CS) -> Namespace<'a, E, CS::Root> {
+    cs.namespace(|| "")
+}
 
 
-
-struct RedShiftVerifierCircuit<E: Engine, I: OracleGadget<E>, T: ChannelGadget<E>> {
-
+struct RedShiftVerifierCircuit<E, O, T, I> 
+where E: Engine, O: OracleGadget<E>, T: ChannelGadget<E>, I: Iterator<Item = Option<E::Fr>>
+{
     _engine_marker : std::marker::PhantomData<E>,
-    _oracle_marker : std::marker::PhantomData<I>,
+    _oracle_marker : std::marker::PhantomData<O>,
     _channel_marker : std::marker::PhantomData<T>,
 
     channel_params: T::Params,
-    oracles_params: I::Params,
+    oracle_params: O::Params,
+    fri_params: FriParams,
+    input_stream: I,
+    public_inputs : Vec<Option<E::Fr>>,
 }
 
 
-impl<E: Engine, I: OracleGadget<E>, T: ChannelGadget<E>> RedShiftVerifierCircuit<E, I, T> {
+impl<E, O, T, I> RedShiftVerifierCircuit<E, O, T, I> 
+where E: Engine, O: OracleGadget<E>, T: ChannelGadget<E>, I: Iterator<Item = Option<E::Fr>> 
+{
+    pub fn new(channel_params: T::Params, oracle_params: O::Params, fri_params: FriParams, stream : I, public: Vec<Option<E::Fr>>) -> Self {
 
+        RedShiftVerifierCircuit {
+            
+            _engine_marker : std::marker::PhantomData::<E>,
+            _oracle_marker : std::marker::PhantomData::<O>,
+            _channel_marker : std::marker::PhantomData::<T>,
 
+            channel_params,
+            oracle_params,
+            fri_params,
+            input_stream: stream,
+            public_inputs : public,
+        }
+    }
 }
 
 
- impl<E: Engine, I: OracleGadget<E>, T: ChannelGadget<E>> Circuit<E> for RedShiftVerifierCircuit<E, I, T> {
+ impl<E, O, T, I> Circuit<E> for RedShiftVerifierCircuit<E, O, T, I> 
+ where 
+    E: Engine, O: OracleGadget<E, Commitment = AllocatedNum<E>>, T: ChannelGadget<E>, I: Iterator<Item = Option<E::Fr>>,
+ {
 
      fn synthesize<CS: ConstraintSystem<E>>(
-        self,
+        mut self,
         cs: &mut CS,
     ) -> Result<(), SynthesisError> {
 
-            let mut channel = T::new(channel_params);
+        let coset_size = 1 << self.fri_params.collapsing_factor;
+        let n = self.fri_params.initial_degree_plus_one.get();
+        let top_level_oracle_size = (n * self.fri_params.lde_factor) / coset_size;
+        let top_level_height = log2_floor(top_level_oracle_size);
 
-            match find_commitment_by_label("a", &proof.commitments) {
-        None => return Ok(false),
-        Some(x) => channel.consume(x),
-    };
+        let mut channel = T::new(self.channel_params);
+        
+        let precomputation = RedshiftSetupPrecomputation::<E,O>::from_stream(
+            cs.namespace(|| "initialize precomputation"), 
+            &mut self.input_stream, 
+            top_level_height,
+        )?;
 
-    match find_commitment_by_label("b", &proof.commitments) {
-        None => return Ok(false),
-        Some(x) => channel.consume(x),
-    };
+        let proof = RedshiftProof::<E, O>::from_stream(
+            cs.namespace(|| "initialize proof"),
+            &mut self.input_stream, 
+            self.fri_params.clone(),
+        )?;
 
-    match find_commitment_by_label("c", &proof.commitments) {
-        None => return Ok(false),
-        Some(x) => channel.consume(x),
-    };
+        let a_com : &AllocatedNum<E> = find_by_label("a", &proof.commitments)?;
+        channel.consume(a_com.clone(), unnamed(cs))?;
+   
+        let b_com : &AllocatedNum<E> = find_by_label("b", &proof.commitments)?;
+        channel.consume(b_com.clone(), unnamed(cs))?;
+        
+        let c_com : &AllocatedNum<E> = find_by_label("c", &proof.commitments)?;
+        channel.consume(c_com.clone(), unnamed(cs))?;
 
-    let beta = channel.produce_field_element_challenge();
-    let gamma = channel.produce_field_element_challenge();
+        let beta = channel.produce_challenge(unnamed(cs))?;
+        let gamma = channel.produce_challenge(unnamed(cs))?;
 
-    match find_commitment_by_label("z_1", &proof.commitments) {
-        None => return Ok(false),
-        Some(x) => channel.consume(x),
-    };
+        let z_1_com : &AllocatedNum<E> = find_by_label("z_1", &proof.commitments)?;
+        channel.consume(z_1_com.clone(), unnamed(cs))?;
+        
+        let z_2_com : &AllocatedNum<E> = find_by_label("z_2", &proof.commitments)?; 
+        channel.consume(z_2_com.clone(), unnamed(cs))?;
 
-    match find_commitment_by_label("z_2", &proof.commitments) {
-        None => return Ok(false),
-        Some(x) => channel.consume(x),
-    };
+        let alpha = channel.produce_challenge(unnamed(cs))?;
 
-    let alpha = channel.produce_field_element_challenge();
+        let t_low_com : &AllocatedNum<E> = find_by_label("t_low", &proof.commitments)?;
+        channel.consume(t_low_com.clone(), unnamed(cs))?;
+    
+        let t_mid_com : &AllocatedNum<E> = find_by_label("t_mid", &proof.commitments)?;
+        channel.consume(t_mid_com.clone(), unnamed(cs))?;
 
-    match find_commitment_by_label("t_low", &proof.commitments) {
-        None => return Ok(false),
-        Some(x) => channel.consume(x),
-    };
+        let t_high_com : &AllocatedNum<E> = find_by_label("t_high", &proof.commitments)?;
+        channel.consume(t_high_com.clone(), unnamed(cs))?;
 
-    match find_commitment_by_label("t_mid", &proof.commitments) {
-        None => return Ok(false),
-        Some(x) => channel.consume(x),
-    };
+        // TODO: we should be very carefule in choosing z!
+        // at least it should be nonzero, but I suppose that it also should not been contained in our domain
+        // add additiona constraints in order to ensure this!
 
-    match find_commitment_by_label("t_high", &proof.commitments) {
-        None => return Ok(false),
-        Some(x) => channel.consume(x),
-    };
+        let z = channel.produce_challenge(unnamed(cs))?;
 
-        Ok(())
-    }
-}
-            
+        // check the final equation at single point z!
 
-
-
-// pub fn verify_proof<E: Engine, I: Oracle<E::Fr>, T: Channel<E::Fr, Input = I::Commitment>>(
-//     proof: RedshiftProof<E::Fr, I>,
-//     public_inputs: &[E::Fr],
-//     setup_precomp: &RedshiftSetupPrecomputation<E::Fr, I>,
-//     fri_params: &FriParams,
-//     oracle_params: &I::Params,
-//     channel_params: &T::Params,
-// ) -> Result<bool, SynthesisError> 
-// where E::Fr : PrimeField
-//{
-//     let mut channel = T::new(channel_params);
-
-//     // we assume that deg is the same for all the polynomials for now
-//     let n = setup_precomp.q_l_aux.deg;
-//     // we need n+1 to be a power of two and can not have n to be power of two
-//     let required_domain_size = n + 1;
-//     assert!(required_domain_size.is_power_of_two());
-
-//     fn find_commitment_by_label<T>(label: Label, arr: &Vec<(Label, T)>) -> Option<&T> {
-//         arr.iter().find(|(l, _)| *l == label).map(|(_, c)| c)
-//     }
-
-//     match find_commitment_by_label("a", &proof.commitments) {
-//         None => return Ok(false),
-//         Some(x) => channel.consume(x),
-//     };
-
-//     match find_commitment_by_label("b", &proof.commitments) {
-//         None => return Ok(false),
-//         Some(x) => channel.consume(x),
-//     };
-
-//     match find_commitment_by_label("c", &proof.commitments) {
-//         None => return Ok(false),
-//         Some(x) => channel.consume(x),
-//     };
-
-//     let beta = channel.produce_field_element_challenge();
-//     let gamma = channel.produce_field_element_challenge();
-
-//     match find_commitment_by_label("z_1", &proof.commitments) {
-//         None => return Ok(false),
-//         Some(x) => channel.consume(x),
-//     };
-
-//     match find_commitment_by_label("z_2", &proof.commitments) {
-//         None => return Ok(false),
-//         Some(x) => channel.consume(x),
-//     };
-
-//     let alpha = channel.produce_field_element_challenge();
-
-//     match find_commitment_by_label("t_low", &proof.commitments) {
-//         None => return Ok(false),
-//         Some(x) => channel.consume(x),
-//     };
-
-//     match find_commitment_by_label("t_mid", &proof.commitments) {
-//         None => return Ok(false),
-//         Some(x) => channel.consume(x),
-//     };
-
-//     match find_commitment_by_label("t_high", &proof.commitments) {
-//         None => return Ok(false),
-//         Some(x) => channel.consume(x),
-//     };
-
-//     let mut z = E::Fr::one();
+        //     let mut z = E::Fr::one();
 //     let field_zero = E::Fr::zero();
 //     while z.pow([n as u64]) == E::Fr::one() || z == field_zero {
 //         z = channel.produce_field_element_challenge();
 //     }
 
-//     // this is a sanity check of the final equation
+//    
 
 //     let a_at_z = proof.a_opening_value;
 //     let b_at_z = proof.b_opening_value;
@@ -238,6 +208,17 @@ impl<E: Engine, I: OracleGadget<E>, T: ChannelGadget<E>> RedShiftVerifierCircuit
 //     tmp.mul_assign(&z_in_pow_of_domain_size);
 //     tmp.mul_assign(&t_high_at_z);
 //     t_at_z.add_assign(&tmp);
+
+        Ok(())
+    }
+}
+            
+
+
+
+
+
+
 
 //     let mut t_1 = {
 //         let mut res = q_c_at_z;

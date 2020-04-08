@@ -219,44 +219,50 @@ impl<E: Engine> FriUtilsGadget<E> {
     // this method solver the following task: 
     // we are given elements of coset: (a_0, a_1, ..., a_n) and coset_index i \in [0, n]
     // we want to take particular element according to the index
-    pub fn choose_element_in_coset<'a, CS, I>(&self, mut cs: CS, coset: &mut [Num<E>], index: I) -> Result<AllocatedNum<E>, SynthesisError>
+    pub fn choose_element_in_coset<'a, CS, I>(&self, mut cs: CS, coset: &[AllocatedNum<E>], index: I) -> Result<AllocatedNum<E>, SynthesisError>
     where CS: ConstraintSystem<E>, I : Iterator<Item = &'a Boolean>,
     {
 
         assert_eq!(coset.len(), self.wrapping_factor);
-        let mut array : Vec<AllocatedNum<E>> = Vec::with_capacity(3 * self.wrapping_factor /2 );
-        // first, simplify all Nums
-        for (elem, o) in coset.iter_mut().zip(array.iter_mut()) {
-            *o = elem.simplify(cs.namespace(|| "simplification"))?;
-        }
-        array.extend(iter::repeat(AllocatedNum::default::<CS>()).take(self.wrapping_factor / 2));    
-
-        for (elem, o) in coset.iter_mut().zip(array[..self.wrapping_factor].iter_mut()) {
-            *o = elem.simplify(cs.namespace(|| "simplification"))?;
-        }
+        let mut array : Vec<AllocatedNum<E>> = Vec::new();
+        // first, fill in array!
 
         let mut take_left_part = true;
         let mut input_len = self.wrapping_factor;
 
         for (i, bit) in index.enumerate() {
-            
-            let (left_part, right_part) = array.split_at_mut(self.wrapping_factor);
-            let (input, output) = match take_left_part {
-                true => (&left_part[0..input_len], &mut right_part[0..input_len/2]),
-                false => (&right_part[0..input_len], &mut left_part[0..input_len/2]), 
-            };
 
-            for (pair, o) in input.chunks(2).zip(output.iter_mut()) {
-                *o = AllocatedNum::conditionally_select(
-                    cs.namespace(|| "chooser"), 
-                    &pair[1], 
-                    &pair[0],
-                    bit,
-                )?;
+            if i == 0 {
+                // on first iteration we simply fill in array
+                array = coset.chunks(2).map(|chunk| {
+                    AllocatedNum::conditionally_select(
+                        cs.namespace(|| "chooser"), 
+                        &chunk[1], 
+                        &chunk[0],
+                        bit,
+                    )
+                }).collect::<Result<_, _>>()?;
             }
+            else {
+                
+                let (left_part, right_part) = array.split_at_mut(self.wrapping_factor);
+                let (input, output) = match take_left_part {
+                    true => (&left_part[0..input_len], &mut right_part[0..input_len/2]),
+                    false => (&right_part[0..input_len], &mut left_part[0..input_len/2]), 
+                };
+            
+                for (pair, o) in input.chunks(2).zip(output.iter_mut()) {
+                    *o = AllocatedNum::conditionally_select(
+                        cs.namespace(|| "chooser"), 
+                        &pair[1], 
+                        &pair[0],
+                        bit,
+                    )?;
+                }
 
-            take_left_part = !take_left_part;
-            input_len >>= 1;
+                take_left_part = !take_left_part;
+                input_len >>= 1;
+            }         
         }
         
         let res = match take_left_part {
@@ -271,15 +277,15 @@ impl<E: Engine> FriUtilsGadget<E> {
     pub fn coset_interpolation_value<'a, CS: ConstraintSystem<E>, I: DoubleEndedIterator<Item = &'a Boolean>>(
         &self,
         mut cs: CS,
-        coset_values: &[Num<E>],
+        coset_values: &[AllocatedNum<E>],
         coset_tree_idx: I,
         // contains alpha, alpha^2, alpha^4, ...
         challenges: &[AllocatedNum<E>],
     ) -> Result<AllocatedNum<E>, SynthesisError> {
 
         let coset_size = self.wrapping_factor;
-        let mut this_level_values : Vec<Num<E>> = vec![];
-        let mut next_level_values : Vec<Num<E>>;
+        let mut this_level_values : Vec<AllocatedNum<E>> = vec![];
+        let mut next_level_values : Vec<AllocatedNum<E>>;
         
         let mut coset_omega_inv = AllocatedNum::pow(
             cs.namespace(|| "get coset specific omega"),
@@ -329,11 +335,11 @@ impl<E: Engine> FriUtilsGadget<E> {
                     },
                 };
            
-                let mut v_even : Num<E> = f0.clone();
-                v_even.add_assign(&f1);
+                let mut v_even : Num<E> = f0.clone().into();
+                v_even.mut_add_number_with_coeff(&f1, one);
 
-                let mut v_odd : Num<E> = f0.clone();
-                v_odd.sub_assign(&f1);
+                let mut v_odd : Num<E> = f0.clone().into();
+                v_even.mut_add_number_with_coeff(&f1, minus_one);
                 v_odd = Num::mul_by_var_with_coeff(
                     cs.namespace(|| "scale by coset omega"),
                     &v_odd, 
@@ -357,7 +363,7 @@ impl<E: Engine> FriUtilsGadget<E> {
                         }
                     })?;
 
-                let mut res_num : Num<E> = res.into();
+                let mut res_num : Num<E> = res.clone().into();
                 res_num.scale(self.two.clone());
                 res_num.sub_assign(&v_even);
 
@@ -368,7 +374,7 @@ impl<E: Engine> FriUtilsGadget<E> {
                     &res_num,
                 );
 
-                next_level_values.push(res_num);
+                next_level_values.push(res);
             }
 
             if wrapping_step != self.collapsing_factor - 1 {
@@ -380,7 +386,7 @@ impl<E: Engine> FriUtilsGadget<E> {
                 this_level_values = next_level_values;
             } 
             else {
-                interpolant = next_level_values.into_iter().nth(0).map(|x| x.force_simplify().expect("this Num should be simple"));
+                interpolant = next_level_values.into_iter().nth(0);
             }         
         }
 

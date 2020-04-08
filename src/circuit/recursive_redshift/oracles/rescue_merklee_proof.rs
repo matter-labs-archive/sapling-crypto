@@ -51,7 +51,7 @@ impl<'a, E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> RescueTreeGadg
         }
     }
 
-    fn hash_elems_into_leaf<CS>(&self, mut cs: CS, elems: &[Num<E>]) -> Result<Num<E>, SynthesisError> 
+    fn hash_elems_into_leaf<CS>(&self, mut cs: CS, elems: &[AllocatedNum<E>]) -> Result<Num<E>, SynthesisError> 
     where CS: ConstraintSystem<E> {
         assert_eq!(elems.len(), self.num_elems_per_leaf);
         
@@ -136,7 +136,7 @@ impl<'a, E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> RescueTreeGadg
         mut cs: CS,
         height: usize, 
         root: &AllocatedNum<E>, 
-        elems : &[Num<E>],
+        elems : &[AllocatedNum<E>],
         path: &[Boolean], 
         witness: &[AllocatedNum<E>]
     ) -> Result<Boolean, SynthesisError> {
@@ -172,7 +172,7 @@ impl<'a, E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> OracleGadget<E
         &self, 
         cs: CS,
         height: usize, 
-        elems : &[Num<E>],
+        elems : &[AllocatedNum<E>],
         path: &[Boolean],
         commitment: &Self::Commitment, 
         proof: &Self::Proof,
@@ -246,15 +246,13 @@ mod test {
                 let root = AllocatedNum::alloc(cs.namespace(|| "allocate root"), || Ok(self.root_hash))?;
                 let index = self.index;
 
-                let elems : Vec<Num<E>> = self.leaf_elems.into_iter().map(|e| {
-                    let temp = AllocatedNum::alloc(cs.namespace(|| "allocate leaf elem"), || Ok(e)).expect("must allocate");
-                    let res : Num<E> = temp.into();
-                    res
-                }).collect();
+                let elems = self.leaf_elems.into_iter().map(|e| {
+                    AllocatedNum::alloc(cs.namespace(|| "allocate leaf elem"), || Ok(e))
+                }).collect::<Result<Vec<_>, SynthesisError>>()?;
 
                 let proof : Vec<AllocatedNum<E>> = self.merkle_proof.into_iter().map(|e| {
-                    AllocatedNum::alloc(cs.namespace(|| "allocate merkle proof elem"), || Ok(e)).expect("must allocate")
-                }).collect();
+                    AllocatedNum::alloc(cs.namespace(|| "allocate merkle proof elem"), || Ok(e))
+                }).collect::<Result<Vec<_>, SynthesisError>>()?;
 
                 let index = AllocatedNum::alloc(
                     cs.namespace(|| "index"), 
