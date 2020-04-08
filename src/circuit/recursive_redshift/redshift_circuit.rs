@@ -140,74 +140,84 @@ where E: Engine, O: OracleGadget<E>, T: ChannelGadget<E>, I: Iterator<Item = Opt
 
         // check the final equation at single point z!
 
-        //     let mut z = E::Fr::one();
-//     let field_zero = E::Fr::zero();
-//     while z.pow([n as u64]) == E::Fr::one() || z == field_zero {
-//         z = channel.produce_field_element_challenge();
-//     }
+        let a_at_z = find_by_label("a", &proof.opening_values)?;
+        let b_at_z = find_by_label("b", &proof.opening_values)?;
+        let c_at_z = find_by_label("c", &proof.opening_values)?;
+        let c_shifted_at_z = find_by_label("c_shifted", &proof.opening_values)?;
 
-//    
+        let q_l_at_z = find_by_label("q_l", &proof.opening_values)?;
+        let q_r_at_z = find_by_label("q_r", &proof.opening_values)?;
+        let q_o_at_z = find_by_label("q_o", &proof.opening_values)?;
+        let q_m_at_z = find_by_label("q_m", &proof.opening_values)?;
+        let q_c_at_z = find_by_label("q_c", &proof.opening_values)?;
+        let q_add_sel_at_z = find_by_label("q_add_sel", &proof.opening_values)?;
 
-//     let a_at_z = proof.a_opening_value;
-//     let b_at_z = proof.b_opening_value;
-//     let c_at_z = proof.c_opening_value;
-//     let c_shifted_at_z = proof.c_shifted_opening_value;
+        let s_id_at_z = find_by_label("s_id", &proof.opening_values)?;
+        let sigma_1_at_z = find_by_label("sigma_1", &proof.opening_values)?;
+        let sigma_2_at_z = find_by_label("sigma_2", &proof.opening_values)?;
+        let sigma_3_at_z = find_by_label("sigma_3", &proof.opening_values)?;
 
-//     let q_l_at_z = proof.q_l_opening_value;
-//     let q_r_at_z = proof.q_r_opening_value;
-//     let q_o_at_z = proof.q_o_opening_value;
-//     let q_m_at_z = proof.q_m_opening_value;
-//     let q_c_at_z = proof.q_c_opening_value;
-//     let q_add_sel_at_z = proof.q_add_sel_opening_value;
+        let z_1_at_z = find_by_label("z_1",  &proof.opening_values)?;
+        let z_2_at_z = find_by_label("z_2", &proof.opening_values)?;
 
-//     let s_id_at_z = proof.s_id_opening_value;
-//     let sigma_1_at_z = proof.sigma_1_opening_value;
-//     let sigma_2_at_z = proof.sigma_2_opening_value;
-//     let sigma_3_at_z = proof.sigma_3_opening_value;
+        let z_1_shifted_at_z = find_by_label("z_1_shifted", &proof.opening_values)?;
+        let z_2_shifted_at_z = find_by_label("z_2_shifted", &proof.opening_values)?;
 
-//     let mut inverse_vanishing_at_z = evaluate_inverse_vanishing_poly::<E>(required_domain_size, z);
+        let t_low_at_z = find_by_label("t_low", &proof.opening_values)?;
+        let t_mid_at_z = find_by_label("t_mid", &proof.opening_values)?;
+        let t_high_at_z = find_by_label("t_high", &proof.opening_values)?;
 
-//     let z_1_at_z = proof.z_1_opening_value;
-//     let z_2_at_z = proof.z_2_opening_value;
+        // compute the righthandsize term: T_low(z) + T_mid(z) * z^n + T_high(z) * z^(2n)
+        let decomposed_n = u64_into_boolean_vec_le(unnamed(cs), Some(n as u64))?;
+        let z_in_pow_n = AllocatedNum::pow(unnamed(cs), &z, decomposed_n.iter())?;
 
-//     let z_1_shifted_at_z = proof.z_1_shifted_opening_value;
-//     let z_2_shifted_at_z = proof.z_2_shifted_opening_value;
+        let mut rhs : Num<E> = t_low_at_z.clone().into();
+        let mid_term = t_mid_at_z.mul(unnamed(cs), &z_in_pow_n)?;
+        rhs.mut_add_number_with_coeff(&mid_term, E::Fr::one());
 
-//     let l_0_at_z = evaluate_lagrange_poly::<E>(required_domain_size, 0, z);
-//     let l_n_minus_one_at_z = evaluate_lagrange_poly::<E>(required_domain_size, n - 1, z);
+        let z_in_pow_2n = z_in_pow_n.square(unnamed(cs))?;
+        let highest_term = t_high_at_z.mul(unnamed(cs), &z_in_pow_2n)?;
+        rhs.mut_add_number_with_coeff(&highest_term, coeff: E::Fr)
 
-//     let mut PI_at_z = E::Fr::zero();
-//     for (i, val) in public_inputs.iter().enumerate() {
-//         if i == 0 {
-//             let mut temp = l_0_at_z;
-//             temp.mul_assign(val);
-//             PI_at_z.sub_assign(&temp);
-//         }
-//         else {
-//             // TODO: maybe make it multithreaded
-//             let mut temp = evaluate_lagrange_poly::<E>(required_domain_size, i, z);
-//             temp.mul_assign(val);
-//             PI_at_z.sub_assign(&temp);
-//         }
-//     }
+        // begin computing the lhs term
 
-//     let t_low_at_z = proof.t_low_opening_value;
-//     let t_mid_at_z = proof.t_mid_opening_value;
-//     let t_high_at_z = proof.t_high_opening_value;
+//         let mut t_1 = {
+//         let mut res = q_c_at_z;
 
-//     let z_in_pow_of_domain_size = z.pow([required_domain_size as u64]);
+//         let mut tmp = q_l_at_z;
+//         tmp.mul_assign(&a_at_z);
+//         res.add_assign(&tmp);
 
-//     let mut t_at_z = E::Fr::zero();
-//     t_at_z.add_assign(&t_low_at_z);
+//         let mut tmp = q_r_at_z;
+//         tmp.mul_assign(&b_at_z);
+//         res.add_assign(&tmp);
 
-//     let mut tmp = z_in_pow_of_domain_size;
-//     tmp.mul_assign(&t_mid_at_z);
-//     t_at_z.add_assign(&tmp);
+//         let mut tmp = q_o_at_z;
+//         tmp.mul_assign(&c_at_z);
+//         res.add_assign(&tmp);
 
-//     let mut tmp = z_in_pow_of_domain_size;
-//     tmp.mul_assign(&z_in_pow_of_domain_size);
-//     tmp.mul_assign(&t_high_at_z);
-//     t_at_z.add_assign(&tmp);
+//         let mut tmp = q_m_at_z;
+//         tmp.mul_assign(&a_at_z);
+//         tmp.mul_assign(&b_at_z);
+//         res.add_assign(&tmp);
+
+//         // add additional shifted selector
+//         let mut tmp = q_add_sel_at_z;
+//         tmp.mul_assign(&c_shifted_at_z);
+//         res.add_assign(&tmp);
+
+//         // add public inputs
+//         res.add_assign(&PI_at_z);
+
+//         // no need for the first one
+//         //inverse_vanishing_at_z.mul_assign(&alpha);
+
+//         res.mul_assign(&inverse_vanishing_at_z);
+
+//         res
+//     };
+
+        
 
         Ok(())
     }
