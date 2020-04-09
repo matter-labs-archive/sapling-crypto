@@ -1069,6 +1069,29 @@ impl<E: Engine> Num<E> {
             |lc| lc + c.get_lc(),
         ); 
     }
+
+    pub fn div<CS: ConstraintSystem<E>>(mut cs: CS, nom: &Self, denom: &Self) -> Result<AllocatedNum<E>, SynthesisError> {
+
+        let quotient = AllocatedNum::alloc(
+            cs.namespace(|| "quotient"), 
+            || {
+                let mut nom_value = nom.get_value().get()?;
+                let denom_value = denom.get_value().get()?;
+                let denom_value_inv = denom_value.inverse().ok_or(SynthesisError::DivisionByZero)?;
+                nom_value.mul_assign(&denom_value_inv);
+                Ok(*nom_value)
+            }
+        )?;
+
+        cs.enforce(
+            || "denom * quotient == nom",
+            |lc| lc + denom.get_lc(),
+            |lc| lc + quotient.get_variable(),
+            |lc| lc + nom.get_lc(),
+        );
+
+        Ok(quotient)
+    }
 }
 
 
