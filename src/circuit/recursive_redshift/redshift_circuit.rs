@@ -103,7 +103,7 @@ pub fn evaluate_lagrange_poly<E: Engine, CS: ConstraintSystem<E>>(
 
 
 struct RedShiftVerifierCircuit<E, O, T, I> 
-where E: Engine, O: OracleGadget<E>, T: ChannelGadget<E>, I: Iterator<Item = Option<E::Fr>>
+where E: Engine, O: OracleGadget<E, Commitment = AllocatedNum<E>>, T: ChannelGadget<E>, I: Iterator<Item = Option<E::Fr>>
 {
     _engine_marker : std::marker::PhantomData<E>,
     _oracle_marker : std::marker::PhantomData<O>,
@@ -118,7 +118,7 @@ where E: Engine, O: OracleGadget<E>, T: ChannelGadget<E>, I: Iterator<Item = Opt
 
 
 impl<E, O, T, I> RedShiftVerifierCircuit<E, O, T, I> 
-where E: Engine, O: OracleGadget<E>, T: ChannelGadget<E>, I: Iterator<Item = Option<E::Fr>> 
+where E: Engine, O: OracleGadget<E, Commitment = AllocatedNum<E>>, T: ChannelGadget<E>, I: Iterator<Item = Option<E::Fr>>, 
 {
     pub fn new(channel_params: T::Params, oracle_params: O::Params, fri_params: FriParams, stream : I, public: Vec<E::Fr>) -> Self {
 
@@ -134,6 +134,27 @@ where E: Engine, O: OracleGadget<E>, T: ChannelGadget<E>, I: Iterator<Item = Opt
             input_stream: stream,
             public_inputs : public,
         }
+    }
+
+    pub fn get_fri_challenges<CS: ConstraintSystem<E>>(
+        &self,
+        cs : &mut CS,
+        proof: &BatchedFriProof<E, O>,
+        channel: &mut T,
+    ) -> Result<Vec<AllocatedNum<E>>, SynthesisError> {
+        
+        let mut fri_challenges = vec![];
+        fri_challenges.push(channel.produce_challenge(unnamed(cs))?);
+
+        for commitment in proof.commitments.iter().cloned() {
+            let iop_challenge = {
+                channel.consume(commitment, cs)?;
+                channel.produce_challenge(cs)?
+            };
+
+            fri_challenges.push(iop_challenge);
+        }
+        Ok(fri_challenges)
     }
 }
 
@@ -304,8 +325,7 @@ where
             
             let mut res : Num<E> = z_1_at_z.clone().into();
 
-            let tmp = s_id_at_z.mul(unnamed(cs), &beta)?;
-            let tmp : Num<E> = tmp.into();
+            let mut tmp : Num<E> = s_id_at_z.mul(unnamed(cs), &beta)?.into();
             tmp += a_at_z.clone();
             tmp += gamma.clone();
             
@@ -373,21 +393,72 @@ where
             Num::mul(unnamed(cs), &res, &inverse_vanishing_at_z.clone().into())?
         };
 
-        let lhs = Num::zero();
+        let mut lhs = Num::zero();
         lhs += term1;
         lhs += term2;
         lhs += term3;
         lhs += term4;
         lhs += term5;
 
-    // if t_1 != t_at_z {
-    //     println!("Recalculated t(z) is not equal to the provided value");
-    //     return Ok(false);
-    // }
+        // compare!
+        let unit = Num::from_constant(&E::Fr::one(), cs);
+        Num::enforce(
+            cs.namespace(|| "Plonk equality check at point z"), 
+            &lhs,
+            &unit,
+            &rhs,
+        );
 
-   
+        // Fri validation starts from here
 
-        Ok(())
+        let aggregation_challenge = channel.produce_challenge(unnamed(cs))?;
+
+        let mut upper_layer_commitments = proof.commitments;
+        upper_layer_commitments.extend(precomputation.data.iter().map(|item| {
+            Labeled::new(item.label, item.data.commitment)
+        }));
+      
+        let fri_challenges = self.get_fri_challenges(cs, &proof.fri_proof, &mut channel);
+       
+        let natural_first_element_indexes = (0..self.fri_params.R).map(|_| {
+            let packed = channel.produce_challenge(unnamed(cs))?;
+            let bits = packed.into_bits_le(unnamed(cs))?;
+            bits.truncate(32);
+            
+            Ok(bits)
+        }).collect::<Result<_,_>>();
+
+        let fri_verifier_gadget = FriVerifierGadget<E, O> {
+    
+            FriVerifierGadget<E: Engine, I: OracleGadget<E>> {
+        pub collapsing_factor : usize,
+        //number of iterations done during FRI query phase
+        pub num_query_rounds : usize,
+        pub initial_degree_plus_one : usize,
+        pub lde_factor: usize,
+        //the degree of the resulting polynomial at the bottom level of FRI
+        pub final_degree_plus_one : usize,
+
+        _engine_marker : std::marker::PhantomData<E>,
+        _oracle_marker : std::marker::PhantomData<I>,
+            }
+
+       pub fn verify_proof<CS: ConstraintSystem<E>>(
+        &self,
+        mut cs: CS,
+        oracle_params: &I::Params,
+        // data that is shared among all Fri query rounds
+        upper_layer_combiner: &CombinerFunction<E>,
+        upper_layer_commitments: &[Labeled<I::Commitment>],
+        commitments: &[I::Commitment],
+        final_coefficients: &[AllocatedNum<E>],
+        fri_challenges: &[AllocatedNum<E>],
+        natural_first_element_indexes: Vec<Vec<Boolean>>, 
+
+        query_rounds_data: Vec<FriSingleQueryRoundData<E, I>>,
+    ) -> Result<Boolean, SynthesisError> 
+            
+            Ok(())
     }
 }
             

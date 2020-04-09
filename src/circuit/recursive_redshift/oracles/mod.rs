@@ -29,7 +29,7 @@ pub trait OracleGadget<E: Engine> {
     type Params;
     // additional paramter for parser is the height of the tree
     type Proof : FromStream<E, OracleHeight>;
-    type Commitment : FromStream<E, OracleHeight>;
+    type Commitment : FromStream<E, OracleHeight> + Clone;
 
     fn new(params: &Self::Params) -> Self;
 
