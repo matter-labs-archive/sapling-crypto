@@ -25,7 +25,7 @@ where E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>
         self.state.absorb(data, cs, self.params)
     }
 
-    fn produce_challenge<CS: ConstraintSystem<E>>(&mut self, cs: CS) -> Result<Num<E>, SynthesisError> {
+    fn produce_challenge<CS: ConstraintSystem<E>>(&mut self, cs: CS) -> Result<AllocatedNum<E>, SynthesisError> {
         self.state.squeeze(cs, self.params)
     }
 }

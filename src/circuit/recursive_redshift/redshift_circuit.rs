@@ -16,6 +16,7 @@ use bellman::{
     Namespace,
 };
 use bellman::redshift::IOP::FRI::coset_combining_fri::FriParams;
+use bellman::redshift::domains::*;
 
 use crate::circuit::num::*;
 use crate::circuit::boolean::*;
@@ -71,8 +72,7 @@ pub fn evaluate_lagrange_poly<E: Engine, CS: ConstraintSystem<E>>(
     poly_number: usize,
     omega_inv : &E::Fr,
     point: AllocatedNum<E>,
-    // point raise to m-th power
-    point_pow : AllocatedNum<E>,
+    // point raise to n-th power (n = vanishing size)
     point_in_pow_n : AllocatedNum<E>,
 ) -> Result<AllocatedNum<E>, SynthesisError> 
 {
@@ -102,8 +102,6 @@ pub fn evaluate_lagrange_poly<E: Engine, CS: ConstraintSystem<E>>(
 }
 
 
-
-
 struct RedShiftVerifierCircuit<E, O, T, I> 
 where E: Engine, O: OracleGadget<E>, T: ChannelGadget<E>, I: Iterator<Item = Option<E::Fr>>
 {
@@ -115,14 +113,14 @@ where E: Engine, O: OracleGadget<E>, T: ChannelGadget<E>, I: Iterator<Item = Opt
     oracle_params: O::Params,
     fri_params: FriParams,
     input_stream: I,
-    public_inputs : Vec<Option<E::Fr>>,
+    public_inputs : Vec<E::Fr>,
 }
 
 
 impl<E, O, T, I> RedShiftVerifierCircuit<E, O, T, I> 
 where E: Engine, O: OracleGadget<E>, T: ChannelGadget<E>, I: Iterator<Item = Option<E::Fr>> 
 {
-    pub fn new(channel_params: T::Params, oracle_params: O::Params, fri_params: FriParams, stream : I, public: Vec<Option<E::Fr>>) -> Self {
+    pub fn new(channel_params: T::Params, oracle_params: O::Params, fri_params: FriParams, stream : I, public: Vec<E::Fr>) -> Self {
 
         RedShiftVerifierCircuit {
             
@@ -236,8 +234,7 @@ where
         // compute the righthandsize term: T_low(z) + T_mid(z) * z^n + T_high(z) * z^(2n)
 
         let decomposed_n = u64_into_boolean_vec_le(unnamed(cs), Some(n as u64))?;
-        let simplified_z = z.simplify(unnamed(cs))?;
-        let z_in_pow_n = AllocatedNum::pow(unnamed(cs), &simplified_z, decomposed_n.iter())?;
+        let z_in_pow_n = AllocatedNum::pow(unnamed(cs), &z, decomposed_n.iter())?;
 
         let mut rhs : Num<E> = t_low_at_z.clone().into();
         let mid_term = t_mid_at_z.mul(unnamed(cs), &z_in_pow_n)?;
@@ -250,61 +247,145 @@ where
         // begin computing the lhs term
 
         // prepare public inputs 
+        // TODO: check if I have taken the right domain (or increase by LDE factor?)
 
-        // let l_0_at_z = evaluate_lagrange_poly::<E>(required_domain_size, 0, z);
-   
-        // let mut PI_at_z = E::Fr::zero();
-        // for (i, val) in public_inputs.iter().enumerate() {
-        //     if i == 0 {
-        //         let mut temp = l_0_at_z;
-        //         temp.mul_assign(val);
-        //         PI_at_z.sub_assign(&temp);
-        //     }
-        //     else {
-        //         // TODO: maybe make it multithreaded
-        //         let mut temp = evaluate_lagrange_poly::<E>(required_domain_size, i, z);
-        //         temp.mul_assign(val);
-        //         PI_at_z.sub_assign(&temp);
-        //     }
-        // }
+        let domain_size = n;
+        let domain = Domain::<E::Fr>::new_for_size(domain_size as u64).expect("domain of this size should exist");
+        let omega = domain.generator;
+        let omega_inv = omega.inverse().expect("must exist");
 
-//         let mut t_1 = {
-//         let mut res = q_c_at_z;
+        let l_0_at_z = evaluate_lagrange_poly(unnamed(cs), n, 0, &omega_inv, z.clone(), z_in_pow_n.clone())?;
+        let mut PI_at_z = Num::zero();
 
-//         let mut tmp = q_l_at_z;
-//         tmp.mul_assign(&a_at_z);
-//         res.add_assign(&tmp);
+        for (i, val) in self.public_inputs.into_iter().enumerate() {
+            let input = AllocatedNum::alloc_input(cs.namespace(|| "allocating public input"), || Ok(val))?;
+            let langrange_coef = match i {
+                0 => l_0_at_z.clone(),
+                _ => evaluate_lagrange_poly(unnamed(cs), n, i, &omega_inv, z.clone(), z_in_pow_n.clone())?,
+            };
+            let temp = input.mul(unnamed(cs),&langrange_coef)?;
+            PI_at_z.sub_assign(&temp.into());
+        }
 
-//         let mut tmp = q_r_at_z;
-//         tmp.mul_assign(&b_at_z);
-//         res.add_assign(&tmp);
+        let mut inverse_vanishing_at_z = evaluate_inverse_vanishing_poly(unnamed(cs), n, &omega_inv, z.clone(), z_in_pow_n.clone())?;
+        let l_n_minus_one_at_z = evaluate_lagrange_poly(unnamed(cs), n, n-1, &omega_inv, z.clone(), z_in_pow_n.clone())?;
 
-//         let mut tmp = q_o_at_z;
-//         tmp.mul_assign(&c_at_z);
-//         res.add_assign(&tmp);
+        // (q_l a + q_r b + q_o c + q_m a * b + q_c + q_add_sel q_next) * inv_vanishing_poly
 
-//         let mut tmp = q_m_at_z;
-//         tmp.mul_assign(&a_at_z);
-//         tmp.mul_assign(&b_at_z);
-//         res.add_assign(&tmp);
+        let term1 = {
+            let mut res : Num<E> = q_c_at_z.clone().into();
 
-//         // add additional shifted selector
-//         let mut tmp = q_add_sel_at_z;
-//         tmp.mul_assign(&c_shifted_at_z);
-//         res.add_assign(&tmp);
-
-//         // add public inputs
-//         res.add_assign(&PI_at_z);
-
-//         // no need for the first one
-//         //inverse_vanishing_at_z.mul_assign(&alpha);
-
-//         res.mul_assign(&inverse_vanishing_at_z);
-
-//         res
-//     };
-
+            res += q_l_at_z.mul(unnamed(cs), a_at_z)?;
+            res += q_r_at_z.mul(unnamed(cs), b_at_z)?;  
+            res += q_o_at_z.mul(unnamed(cs), c_at_z)?;
+            res += q_m_at_z.mul(unnamed(cs), a_at_z)?;
         
+            // add additional shifted selector
+            res += q_add_sel_at_z.mul(unnamed(cs), &c_shifted_at_z)?;
+
+            // add public inputs
+            res += &PI_at_z;
+
+            let res = Num::mul(unnamed(cs), &res, &inverse_vanishing_at_z.clone().into())?;
+            res
+        };
+
+        // from now on: permutation check
+
+        let n_fe = E::Fr::from_str(&n.to_string()).expect("must be valid field element");
+        let mut two_n_fe = n_fe;
+        two_n_fe.double();
+
+        // TODO: think how to organize types to make it more readable
+        // macros (usual one) would work
+        // and do something to avoid clonings
+
+        let term2 = {
+            
+            let mut res : Num<E> = z_1_at_z.clone().into();
+
+            let tmp = s_id_at_z.mul(unnamed(cs), &beta)?;
+            let tmp : Num<E> = tmp.into();
+            tmp += a_at_z.clone();
+            tmp += gamma.clone();
+            
+            res = Num::mul(unnamed(cs), &res, &tmp)?.into();
+            
+            tmp = s_id_at_z.clone().into();
+            tmp.add_assign(&Num::from_constant(&n_fe, cs));
+            tmp = Num::mul(unnamed(cs), &tmp, &beta.clone().into())?.into();
+            tmp += b_at_z.clone();
+            tmp += gamma.clone();
+            res = Num::mul(unnamed(cs), &res, &tmp)?.into();
+
+            tmp = s_id_at_z.clone().into();
+            tmp.add_assign(&Num::from_constant(&two_n_fe, cs));
+            tmp = Num::mul(unnamed(cs), &tmp, &beta.clone().into())?.into();
+            tmp += c_at_z.clone();
+            tmp += gamma.clone();
+            res = Num::mul(unnamed(cs), &res, &tmp)?.into();
+
+            res -= z_1_shifted_at_z.clone();
+
+            inverse_vanishing_at_z = inverse_vanishing_at_z.mul(unnamed(cs), &alpha)?;
+            Num::mul(unnamed(cs), &res, &inverse_vanishing_at_z.clone().into())?
+        };
+
+        let term3 = {
+            let mut res : Num<E> = z_2_at_z.clone().into();
+
+            let mut tmp : Num<E> = sigma_1_at_z.mul(unnamed(cs), &beta)?.into();
+            tmp += a_at_z.clone();
+            tmp += gamma.clone();
+            res = Num::mul(unnamed(cs), &res, &tmp)?.into();
+
+            tmp = sigma_2_at_z.mul(unnamed(cs), &beta)?.into();
+            tmp += b_at_z.clone();
+            tmp += gamma.clone();
+            res = Num::mul(unnamed(cs), &res, &tmp)?.into();
+
+            tmp = sigma_3_at_z.mul(unnamed(cs), &beta)?.into();
+            tmp += c_at_z.clone();
+            tmp += gamma.clone();
+            res = Num::mul(unnamed(cs), &res, &tmp)?.into();
+           
+            res -= z_1_shifted_at_z.clone();
+
+            inverse_vanishing_at_z = inverse_vanishing_at_z.mul(unnamed(cs), &alpha)?;
+            Num::mul(unnamed(cs), &res, &inverse_vanishing_at_z.clone().into())?
+        };
+
+        let term4 = {
+            let mut res : Num<E> = z_1_shifted_at_z.clone().into();
+            res -= z_2_shifted_at_z.clone();
+            res = Num::mul(unnamed(cs), &res, &l_n_minus_one_at_z.clone().into())?.into();
+            
+            inverse_vanishing_at_z = inverse_vanishing_at_z.mul(unnamed(cs), &alpha)?;
+            Num::mul(unnamed(cs), &res, &inverse_vanishing_at_z.clone().into())?
+        };
+
+        let term5 = {
+            let mut res : Num<E> = z_1_at_z.clone().into();
+            res -= z_2_at_z.clone();
+            res = Num::mul(unnamed(cs), &res, &l_0_at_z.clone().into())?.into();
+
+            inverse_vanishing_at_z = inverse_vanishing_at_z.mul(unnamed(cs), &alpha)?;
+            Num::mul(unnamed(cs), &res, &inverse_vanishing_at_z.clone().into())?
+        };
+
+        let lhs = Num::zero();
+        lhs += term1;
+        lhs += term2;
+        lhs += term3;
+        lhs += term4;
+        lhs += term5;
+
+    // if t_1 != t_at_z {
+    //     println!("Recalculated t(z) is not equal to the provided value");
+    //     return Ok(false);
+    // }
+
+   
 
         Ok(())
     }

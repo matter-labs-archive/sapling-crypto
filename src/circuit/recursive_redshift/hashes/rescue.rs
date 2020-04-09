@@ -189,7 +189,7 @@ impl<E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> RescueGadget<E, RP
         Ok(())
     }
 
-    pub fn squeeze<CS: ConstraintSystem<E>>(&mut self, mut cs: CS, params: &RP) -> Result<Num<E>, SynthesisError> {
+    pub fn squeeze<CS: ConstraintSystem<E>>(&mut self, mut cs: CS, params: &RP) -> Result<AllocatedNum<E>, SynthesisError> {
         loop {
             match self.sponge {
                 SpongeState::Absorbing(ref mut input) => {
@@ -203,7 +203,7 @@ impl<E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> RescueGadget<E, RP
                 SpongeState::Squeezing(ref mut output) => {
                     for entry in output.iter_mut() {
                         if let Some(e) = entry.take() {
-                            //e.simplify(cs.namespace(|| "simplification"))
+                            let e = e.simplify(cs.namespace(|| "simplification"))?;
                             return Ok(e)
                         }
                     }
@@ -260,7 +260,7 @@ mod test {
                     let s = g.squeeze(cs.namespace(|| "squeeze s"), &self.params)?;
                     cs.enforce(
                         || "check output", 
-                        |lc| lc + s.get_lc(), 
+                        |lc| lc + s.get_variable(), 
                         |lc| lc + CS::one(),
                         |lc| lc + val.get_variable(),
                     );

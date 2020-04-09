@@ -1075,11 +1075,11 @@ impl<E: Engine> Num<E> {
         let quotient = AllocatedNum::alloc(
             cs.namespace(|| "quotient"), 
             || {
-                let mut nom_value = nom.get_value().get()?;
-                let denom_value = denom.get_value().get()?;
+                let mut nom_value = nom.get_value().ok_or(SynthesisError::AssignmentMissing)?;
+                let denom_value = denom.get_value().ok_or(SynthesisError::AssignmentMissing)?;
                 let denom_value_inv = denom_value.inverse().ok_or(SynthesisError::DivisionByZero)?;
                 nom_value.mul_assign(&denom_value_inv);
-                Ok(*nom_value)
+                Ok(nom_value)
             }
         )?;
 
@@ -1091,6 +1091,36 @@ impl<E: Engine> Num<E> {
         );
 
         Ok(quotient)
+    }
+}
+
+// some additional syntactis sugar
+use std::ops::{AddAssign, SubAssign};
+
+impl<E: Engine> AddAssign<AllocatedNum<E>> for Num<E> {
+    fn add_assign(&mut self, other: AllocatedNum<E>) {
+        self.mut_add_number_with_coeff(&other, E::Fr::one());
+    }
+}
+
+impl<E: Engine> SubAssign<AllocatedNum<E>> for Num<E> {
+    
+    fn sub_assign(&mut self, other: AllocatedNum<E>) {
+        let mut minus_one = E::Fr::one();
+        minus_one.negate();
+        self.mut_add_number_with_coeff(&other, minus_one);
+    }
+}
+
+impl<E: Engine> AddAssign<&Num<E>> for Num<E> {
+    fn add_assign(&mut self, other: &Num<E>) {
+        self.add_assign(other);
+    }
+}
+
+impl<E: Engine> SubAssign<&Num<E>> for Num<E> {
+    fn sub_assign(&mut self, other: &Num<E>) {
+        self.sub_assign(other);
     }
 }
 

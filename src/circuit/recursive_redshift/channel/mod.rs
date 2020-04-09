@@ -17,5 +17,5 @@ pub trait ChannelGadget<E: Engine> {
     fn new(params: Self::Params) -> Self;
 
     fn consume<CS: ConstraintSystem<E>>(&mut self, data: AllocatedNum<E>, cs: CS) -> Result<(), SynthesisError>;
-    fn produce_challenge<CS: ConstraintSystem<E>>(&mut self, cs: CS) -> Result<Num<E>, SynthesisError>;
+    fn produce_challenge<CS: ConstraintSystem<E>>(&mut self, cs: CS) -> Result<AllocatedNum<E>, SynthesisError>;
 }

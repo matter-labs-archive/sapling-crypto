@@ -51,7 +51,7 @@ impl<'a, E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> RescueTreeGadg
         }
     }
 
-    fn hash_elems_into_leaf<CS>(&self, mut cs: CS, elems: &[AllocatedNum<E>]) -> Result<Num<E>, SynthesisError> 
+    fn hash_elems_into_leaf<CS>(&self, mut cs: CS, elems: &[AllocatedNum<E>]) -> Result<AllocatedNum<E>, SynthesisError> 
     where CS: ConstraintSystem<E> {
         assert_eq!(elems.len(), self.num_elems_per_leaf);
         
@@ -73,10 +73,8 @@ impl<'a, E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> RescueTreeGadg
         hasher.absorb(right.into(), cs.namespace(|| "hashing inside Merklee tree: absorbing"), &self.params)?;
 
         let mut output = hasher.squeeze(cs.namespace(|| "hashing inside Merklee tree: squeezing"), &self.params)?;
-
-        let otput_var = output.simplify(cs.namespace(|| "simplification"))?; 
         
-        Ok(otput_var)
+        Ok(output)
     }
 
     // checks inclusion of the leaf hash into the root
@@ -141,13 +139,12 @@ impl<'a, E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> RescueTreeGadg
         witness: &[AllocatedNum<E>]
     ) -> Result<Boolean, SynthesisError> {
 
-        let mut leaf_hash = self.hash_elems_into_leaf(cs.namespace(|| "encode elems into leaf"), elems)?;
-        let leaf_hash_var = leaf_hash.simplify(cs.namespace(|| "simplification"))?;
+        let leaf_hash = self.hash_elems_into_leaf(cs.namespace(|| "encode elems into leaf"), elems)?;
         let res = self.check_hash_inclusion_with_parsed_path( 
             cs.namespace(|| "merklee proof"),
             height,
             root,
-            leaf_hash_var,
+            leaf_hash,
             path, 
             witness,
         );
