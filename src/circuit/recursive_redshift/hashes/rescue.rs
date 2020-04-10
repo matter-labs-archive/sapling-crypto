@@ -202,7 +202,7 @@ impl<E: Engine, RP: RescueParams<E::Fr>, SBOX: RescueSbox<E>> RescueGadget<E, RP
                 }
                 SpongeState::Squeezing(ref mut output) => {
                     for entry in output.iter_mut() {
-                        if let Some(e) = entry.take() {
+                        if let Some(mut e) = entry.take() {
                             let e = e.simplify(cs.namespace(|| "simplification"))?;
                             return Ok(e)
                         }

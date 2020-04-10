@@ -418,7 +418,7 @@ where
             Labeled::new(item.label, item.data.commitment)
         }));
       
-        let fri_challenges = self.get_fri_challenges(cs, &proof.fri_proof, &mut channel);
+        let fri_challenges = self.get_fri_challenges(cs, &proof.fri_proof, &mut channel)?;
        
         let natural_first_element_indexes = (0..self.fri_params.R).map(|_| {
             let packed = channel.produce_challenge(unnamed(cs))?;
@@ -426,42 +426,40 @@ where
             bits.truncate(32);
             
             Ok(bits)
-        }).collect::<Result<_,_>>();
+        }).collect::<Result<_,_>>()?;
 
-        let fri_verifier_gadget = FriVerifierGadget<E, O> {
-    
-            FriVerifierGadget<E: Engine, I: OracleGadget<E>> {
-        pub collapsing_factor : usize,
-        //number of iterations done during FRI query phase
-        pub num_query_rounds : usize,
-        pub initial_degree_plus_one : usize,
-        pub lde_factor: usize,
-        //the degree of the resulting polynomial at the bottom level of FRI
-        pub final_degree_plus_one : usize,
+        let fri_verifier_gadget = FriVerifierGadget::<E, O> {
+            collapsing_factor : self.fri_params.collapsing_factor,
+            //number of iterations done during FRI query phase
+            num_query_rounds : self.fri_params.R,
+            initial_degree_plus_one : self.fri_params.initial_degree_plus_one.get(),
+            lde_factor: self.fri_params.lde_factor,
+            //the degree of the resulting polynomial at the bottom level of FRI
+            final_degree_plus_one : self.fri_params.final_degree_plus_one,
 
-        _engine_marker : std::marker::PhantomData<E>,
-        _oracle_marker : std::marker::PhantomData<I>,
-            }
+            _engine_marker : std::marker::PhantomData::<E>,
+            _oracle_marker : std::marker::PhantomData::<O>,
+        };
 
-       pub fn verify_proof<CS: ConstraintSystem<E>>(
-        &self,
-        mut cs: CS,
-        oracle_params: &I::Params,
-        // data that is shared among all Fri query rounds
-        upper_layer_combiner: &CombinerFunction<E>,
-        upper_layer_commitments: &[Labeled<I::Commitment>],
-        commitments: &[I::Commitment],
-        final_coefficients: &[AllocatedNum<E>],
-        fri_challenges: &[AllocatedNum<E>],
-        natural_first_element_indexes: Vec<Vec<Boolean>>, 
+        let upper_layer_combiner : Option<u32> = None;
+        
+        let is_fri_valid = fri_verifier_gadget.verify_proof(
+            cs.namespace(|| "verify FRI proof"),
+            &self.oracle_params,
+            upper_layer_combiner,
+            &upper_layer_commitments,
+            &proof.fri_proof.commitments,
+            &proof.fri_proof.final_coefficients,
+            &fri_challenges,
+            natural_first_element_indexes,
+            proof.fri_proof.fri_round_queries,
+        )?;
 
-        query_rounds_data: Vec<FriSingleQueryRoundData<E, I>>,
-    ) -> Result<Boolean, SynthesisError> 
-            
-            Ok(())
+        Boolean::enforce_equal(cs.namespace(|| "check output bit"), &is_fri_valid, &Boolean::constant(true));
+
+        Ok(())
     }
 }
-            
 
 
 
