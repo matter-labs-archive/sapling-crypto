@@ -26,14 +26,9 @@ use crate::circuit::recursive_redshift::channel::*;
 use crate::circuit::recursive_redshift::fri_verifier::*;
 
 use super::data_structs::*;
+use super::upper_layer_combiner::upper_layer_combiner_impl;
 
 // TODO: FriParams are copyable - stop clonning!
-
-pub fn find_by_label<'a, X>(label: Label, arr: &'a Vec<Labeled<X>>) -> Result<&'a X, SynthesisError> {
-
-    arr.iter().find(|elem| elem.label == label).map(|elem| &elem.data).ok_or(SynthesisError::Unknown)
-}
-
 
 pub fn unnamed<'a, E: Engine, CS: ConstraintSystem<E>>(cs: &'a mut CS) -> Namespace<'a, E, CS::Root> {
     cs.namespace(|| "")
@@ -102,6 +97,29 @@ pub fn evaluate_lagrange_poly<E: Engine, CS: ConstraintSystem<E>>(
 }
 
 
+pub fn get_fri_challenges<E, O, T, CS>(
+    cs : &mut CS,
+    proof: &BatchedFriProof<E, O>,
+    channel: &mut T,
+) -> Result<Vec<AllocatedNum<E>>, SynthesisError> 
+where E: Engine, O: OracleGadget<E, Commitment = AllocatedNum<E>>, T: ChannelGadget<E>, CS: ConstraintSystem<E>>
+{
+    
+    let mut fri_challenges = vec![];
+    fri_challenges.push(channel.produce_challenge(unnamed(cs))?);
+
+    for commitment in proof.commitments.iter().cloned() {
+        let iop_challenge = {
+            channel.consume(commitment, unnamed(cs))?;
+            channel.produce_challenge(unnamed(cs))?
+        };
+
+        fri_challenges.push(iop_challenge);
+    }
+    Ok(fri_challenges)
+}
+
+
 struct RedShiftVerifierCircuit<E, O, T, I> 
 where E: Engine, O: OracleGadget<E, Commitment = AllocatedNum<E>>, T: ChannelGadget<E>, I: Iterator<Item = Option<E::Fr>>
 {
@@ -135,27 +153,6 @@ where E: Engine, O: OracleGadget<E, Commitment = AllocatedNum<E>>, T: ChannelGad
             public_inputs : public,
         }
     }
-
-    pub fn get_fri_challenges<CS: ConstraintSystem<E>>(
-        &self,
-        cs : &mut CS,
-        proof: &BatchedFriProof<E, O>,
-        channel: &mut T,
-    ) -> Result<Vec<AllocatedNum<E>>, SynthesisError> {
-        
-        let mut fri_challenges = vec![];
-        fri_challenges.push(channel.produce_challenge(unnamed(cs))?);
-
-        for commitment in proof.commitments.iter().cloned() {
-            let iop_challenge = {
-                channel.consume(commitment, cs)?;
-                channel.produce_challenge(cs)?
-            };
-
-            fri_challenges.push(iop_challenge);
-        }
-        Ok(fri_challenges)
-    }
 }
 
 
@@ -188,40 +185,40 @@ where
             self.fri_params.clone(),
         )?;
 
-        let a_com : &AllocatedNum<E> = find_by_label("a", &proof.commitments)?;
+        let a_com = find_by_label("a", &proof.commitments)?;
         channel.consume(a_com.clone(), unnamed(cs))?;
    
-        let b_com : &AllocatedNum<E> = find_by_label("b", &proof.commitments)?;
+        let b_com = find_by_label("b", &proof.commitments)?;
         channel.consume(b_com.clone(), unnamed(cs))?;
         
-        let c_com : &AllocatedNum<E> = find_by_label("c", &proof.commitments)?;
+        let c_com = find_by_label("c", &proof.commitments)?;
         channel.consume(c_com.clone(), unnamed(cs))?;
 
         let beta = channel.produce_challenge(unnamed(cs))?;
         let gamma = channel.produce_challenge(unnamed(cs))?;
 
-        let z_1_com : &AllocatedNum<E> = find_by_label("z_1", &proof.commitments)?;
+        let z_1_com = find_by_label("z_1", &proof.commitments)?;
         channel.consume(z_1_com.clone(), unnamed(cs))?;
         
-        let z_2_com : &AllocatedNum<E> = find_by_label("z_2", &proof.commitments)?; 
+        let z_2_com = find_by_label("z_2", &proof.commitments)?; 
         channel.consume(z_2_com.clone(), unnamed(cs))?;
 
         let alpha = channel.produce_challenge(unnamed(cs))?;
 
-        let t_low_com : &AllocatedNum<E> = find_by_label("t_low", &proof.commitments)?;
+        let t_low_com = find_by_label("t_low", &proof.commitments)?;
         channel.consume(t_low_com.clone(), unnamed(cs))?;
     
-        let t_mid_com : &AllocatedNum<E> = find_by_label("t_mid", &proof.commitments)?;
+        let t_mid_com = find_by_label("t_mid", &proof.commitments)?;
         channel.consume(t_mid_com.clone(), unnamed(cs))?;
 
-        let t_high_com : &AllocatedNum<E> = find_by_label("t_high", &proof.commitments)?;
+        let t_high_com = find_by_label("t_high", &proof.commitments)?;
         channel.consume(t_high_com.clone(), unnamed(cs))?;
 
         // TODO: we should be very carefule in choosing z!
         // at least it should be nonzero, but I suppose that it also should not been contained in our domain
         // add additiona constraints in order to ensure this!
 
-        let mut z = channel.produce_challenge(unnamed(cs))?;
+        let z = channel.produce_challenge(unnamed(cs))?;
 
         // check the final equation at single point z!
 
@@ -296,10 +293,10 @@ where
         let term1 = {
             let mut res : Num<E> = q_c_at_z.clone().into();
 
-            res += q_l_at_z.mul(unnamed(cs), a_at_z)?;
-            res += q_r_at_z.mul(unnamed(cs), b_at_z)?;  
-            res += q_o_at_z.mul(unnamed(cs), c_at_z)?;
-            res += q_m_at_z.mul(unnamed(cs), a_at_z)?;
+            res += q_l_at_z.mul(unnamed(cs), &a_at_z)?;
+            res += q_r_at_z.mul(unnamed(cs), &b_at_z)?;  
+            res += q_o_at_z.mul(unnamed(cs), &c_at_z)?;
+            res += q_m_at_z.mul(unnamed(cs), &a_at_z)?;
         
             // add additional shifted selector
             res += q_add_sel_at_z.mul(unnamed(cs), &c_shifted_at_z)?;
@@ -415,20 +412,35 @@ where
 
         let mut upper_layer_commitments = proof.commitments;
         upper_layer_commitments.extend(precomputation.data.iter().map(|item| {
-            Labeled::new(item.label, item.data.commitment)
+            Labeled::new(item.label, item.data.commitment.clone())
         }));
       
         let fri_challenges = self.get_fri_challenges(cs, &proof.fri_proof, &mut channel)?;
        
         let natural_first_element_indexes = (0..self.fri_params.R).map(|_| {
             let packed = channel.produce_challenge(unnamed(cs))?;
-            let bits = packed.into_bits_le(unnamed(cs))?;
+            let mut bits = packed.into_bits_le(unnamed(cs))?;
             bits.truncate(32);
             
             Ok(bits)
-        }).collect::<Result<_,_>>()?;
+        }).collect::<Result<_, SynthesisError>>()?;
 
-        let fri_verifier_gadget = FriVerifierGadget::<E, O> {
+        let combiner_func = 
+            |domain_values: Vec<Labeled<&AllocatedNum<E>>>, ev_p :&Num<E>| -> Result<AllocatedNum<E>, SynthesisError> 
+        {
+            upper_layer_combiner_impl(
+                cs.namespace(|| "upper layer combiner"),
+                domain_values,
+                ev_p,
+                &precomputation,
+                &proof.opening_values,
+                z.clone(),
+                aggregation_challenge.clone(),
+                &omega,
+            )
+        };
+
+        let fri_verifier_gadget = FriVerifierGadget::<E, O, _> {
             collapsing_factor : self.fri_params.collapsing_factor,
             //number of iterations done during FRI query phase
             num_query_rounds : self.fri_params.R,
@@ -436,23 +448,22 @@ where
             lde_factor: self.fri_params.lde_factor,
             //the degree of the resulting polynomial at the bottom level of FRI
             final_degree_plus_one : self.fri_params.final_degree_plus_one,
+            upper_layer_combiner : combiner_func,
 
             _engine_marker : std::marker::PhantomData::<E>,
             _oracle_marker : std::marker::PhantomData::<O>,
         };
 
-        let upper_layer_combiner : Option<u32> = None;
         
         let is_fri_valid = fri_verifier_gadget.verify_proof(
             cs.namespace(|| "verify FRI proof"),
             &self.oracle_params,
-            upper_layer_combiner,
             &upper_layer_commitments,
             &proof.fri_proof.commitments,
             &proof.fri_proof.final_coefficients,
             &fri_challenges,
             natural_first_element_indexes,
-            proof.fri_proof.fri_round_queries,
+            &proof.fri_proof.fri_round_queries,
         )?;
 
         Boolean::enforce_equal(cs.namespace(|| "check output bit"), &is_fri_valid, &Boolean::constant(true));

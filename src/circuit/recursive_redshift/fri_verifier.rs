@@ -223,7 +223,7 @@ impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
         fri_challenges: &[AllocatedNum<E>],
         natural_first_element_indexes: Vec<Vec<Boolean>>, 
 
-        query_rounds_data: Vec<FriSingleQueryRoundData<E, I>>,
+        query_rounds_data: &Vec<FriSingleQueryRoundData<E, I>>,
     ) -> Result<Boolean, SynthesisError> 
     {
         
@@ -255,8 +255,8 @@ impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
             num_iters,
         );
 
-        for (mut single_round_data, natural_first_element_index) in 
-            query_rounds_data.into_iter().zip(natural_first_element_indexes) {
+        for (single_round_data, natural_first_element_index) in 
+            query_rounds_data.iter().zip(natural_first_element_indexes) {
 
             let flag = self.verify_single_proof_round(
                 cs.namespace(|| "FRI single round verifier"),
@@ -265,7 +265,7 @@ impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
                 upper_layer_combiner,
                 &mut fri_helper,
 
-                &mut single_round_data.queries[..],
+                &single_round_data.queries[..],
                 commitments,
                 final_coefficients,
 

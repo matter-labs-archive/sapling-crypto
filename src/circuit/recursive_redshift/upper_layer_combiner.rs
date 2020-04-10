@@ -15,6 +15,7 @@ use bellman::{
 use crate::circuit::num::*;
 use crate::circuit::boolean::*;
 use crate::circuit::recursive_redshift::data_structs::*;
+use crate::circuit::recursive_redshift::oracles::OracleGadget;
 
 // given an evaluation point x and auxiliarly point x_1,
 // aggregation_challenge = alpha (the final value of alpha is also returned!)
@@ -26,7 +27,7 @@ use crate::circuit::recursive_redshift::data_structs::*;
 fn combine_at_single_point<E: Engine, CS: ConstraintSystem<E>>(
     cs : &mut CS,
     pairs: Vec<(AllocatedNum<E>, AllocatedNum<E>)>, 
-    x: AllocatedNum<E>, 
+    x: &Num<E>, 
     x_1: AllocatedNum<E>, 
     alpha: AllocatedNum<E>,
 ) -> Result<(AllocatedNum<E>, AllocatedNum<E>), SynthesisError> 
@@ -49,7 +50,7 @@ fn combine_at_single_point<E: Engine, CS: ConstraintSystem<E>>(
     }
 
     // now compute the common denominator
-    let mut temp : Num<E> = x.into();
+    let mut temp : Num<E> = x.clone();
     temp -= x_1;
     let res = Num::div(cs.namespace(|| ""), &res, &temp)?;
     
@@ -72,7 +73,7 @@ fn combine_at_single_point<E: Engine, CS: ConstraintSystem<E>>(
 fn combine_at_two_points<E: Engine, CS: ConstraintSystem<E>>(
     cs: &mut CS,
     triples: Vec<(AllocatedNum<E>, AllocatedNum<E>, AllocatedNum<E>)>, 
-    x: AllocatedNum<E>, 
+    x: &Num<E>, 
     x_1: AllocatedNum<E>,
     x_2: AllocatedNum<E>, 
     alpha: AllocatedNum<E>,
@@ -80,7 +81,7 @@ fn combine_at_two_points<E: Engine, CS: ConstraintSystem<E>>(
 {
     
     // precompute the common slope
-    let mut slope : Num<E> = x.into();
+    let mut slope : Num<E> = x.clone();
     slope -= x_1;
     let mut slope_denum : Num<E> = x_2.into();
     slope_denum -= x_1;
@@ -110,10 +111,10 @@ fn combine_at_two_points<E: Engine, CS: ConstraintSystem<E>>(
     // (x - x_1)(x - x_2) = x^2 - (x_1 + x_2) * x + x_1 * x_2
     let mut t_0 : Num<E> = x_1.clone().into();
     t_0 += x_2;
-    let t_0 = Num::mul_by_var_with_coeff(cs.namespace(|| ""), &t_0, &x, E::Fr::one())?;
+    let t_0 = Num::mul(cs.namespace(|| ""), &t_0, &x)?;
     let t_1 = x_1.mul(cs.namespace(|| ""), &x_2)?;
 
-    let mut common_denominator : Num<E> = x.square(cs.namespace(|| ""))?.into(); 
+    let mut common_denominator : Num<E> = Num::mul(cs.namespace(|| ""), &x, &x)?.into(); 
     common_denominator -= t_0;
     common_denominator += t_1;
     
@@ -122,71 +123,129 @@ fn combine_at_two_points<E: Engine, CS: ConstraintSystem<E>>(
 }
 
 
+pub fn find_setup_value_by_label<E: Engine, I: OracleGadget<E>>(
+    label: Label, 
+    arr: &Vec<Labeled<SinglePolySetupData<E, I>>>,
+) -> Result<AllocatedNum<E>, SynthesisError>
+{
+    arr.iter().find(|elem| elem.label == label).map(|elem| elem.data.setup_value.clone()).ok_or(SynthesisError::Unknown)
+}
+
+
 pub fn upper_layer_combiner_impl<E: Engine, I: OracleGadget<E>, CS: ConstraintSystem<E>>(
     mut cs: CS,
-    values: Vec<Labeled<&AllocatedNum<E>>>,
-    ev_p : &Num<E>,
-    RedshiftSetupPrecomputation,
-    pub opening_values: LabeledVec<AllocatedNum<E>>
+    domain_values: Vec<Labeled<&AllocatedNum<E>>>,
+    evaluation_point : &Num<E>,
+    setup_precomp: &RedshiftSetupPrecomputation<E, I>,
+    opening_values: &LabeledVec<AllocatedNum<E>>,
+    z: AllocatedNum<E>,
+    aggr_challenge : AllocatedNum<E>,
+    omega: &E::Fr,
 ) -> Result<AllocatedNum<E>, SynthesisError> 
 {
+    let setup_polys = &setup_precomp.data;
     
-
-    
-
     // combine polynomials a, b, t_low, t_mid, t_high,
     // which are opened only at z
-    let pairs : Vec<(&E::Fr, E::Fr)> = vec![
-        (find_poly_value_at_omega("a", &arr)?, a_at_z),
-        (find_poly_value_at_omega("b", &arr)?, b_at_z),
-        (find_poly_value_at_omega("t_low", &arr)?, t_low_at_z),
-        (find_poly_value_at_omega("t_mid", &arr)?, t_mid_at_z),
-        (find_poly_value_at_omega("t_high", &arr)?, t_high_at_z),
+    let pairs : Vec<(AllocatedNum<E>, AllocatedNum<E>)> = vec![
+        (find_by_label("a", &domain_values)?.clone(), find_by_label("a", opening_values)?.clone()),
+        (find_by_label("b", &domain_values)?.clone(), find_by_label("b", opening_values)?.clone()),
+        (find_by_label("t_low", &domain_values)?.clone(), find_by_label("t_low", opening_values)?.clone()),
+        (find_by_label("t_mid", &domain_values)?.clone(), find_by_label("t_mid", opening_values)?.clone()),
+        (find_by_label("t_high", &domain_values)?.clone(), find_by_label("t_high", opening_values)?.clone()),
     ];
-
-    let (mut res1, mut alpha1) = combine_at_single_point(pairs, &evaluation_point, &z, &aggregation_challenge);
+       
+    let (mut res1, mut alpha1) = combine_at_single_point(
+        &mut cs, pairs, &evaluation_point, z.clone(), aggr_challenge.clone())?;
 
     // combine witness polynomials z_1, z_2, c which are opened at z and z * omega
 
-    let mut z_shifted = z;
-    z_shifted.mul_assign(&omega);
+    let temp = Num::from_constant(omega, &cs);
+    let mut z_shifted = Num::mul_by_var_with_coeff(cs.namespace(|| ""), &temp, &z, E::Fr::one())?;
 
-    let witness_triples : Vec<(&E::Fr, E::Fr, E::Fr)> = vec![
-        (find_poly_value_at_omega("z_1", &arr)?, z_1_at_z, z_1_shifted_at_z),
-        (find_poly_value_at_omega("z_2", &arr)?, z_2_at_z, z_2_shifted_at_z),
-        (find_poly_value_at_omega("c", &arr)?, c_at_z, c_shifted_at_z),
+    let witness_triples : Vec<(AllocatedNum<E>, AllocatedNum<E>, AllocatedNum<E>)> = vec![
+        ( find_by_label("z_1", &domain_values)?.clone(), 
+          find_by_label("z_1", opening_values)?.clone(), 
+          find_by_label("z_1_shifted", opening_values)?.clone() ),
+
+        ( find_by_label("z_2", &domain_values)?.clone(), 
+          find_by_label("z_2", opening_values)?.clone(), 
+          find_by_label("z_2_shifted", opening_values)?.clone() ),
+
+        ( find_by_label("c", &domain_values)?.clone(), 
+          find_by_label("c", opening_values)?.clone(), 
+          find_by_label("c_shifted", opening_values)?.clone() ),
     ];
 
-    let (mut res2, alpha2) = combine_at_two_points(witness_triples, &evaluation_point, &z, &z_shifted, &aggregation_challenge);
+    let (mut res2, alpha2) = combine_at_two_points(
+        &mut cs, witness_triples, &evaluation_point, z.clone(), z_shifted.clone(), aggr_challenge.clone())?;
 
     // finally combine setup polynomials q_l, q_r, q_o, q_m, q_c, q_add_sel, s_id, sigma_1, sigma_2, sigma_3
     // which are opened at z and z_setup
     // in current implementation we assume that setup point is the same for all circuit-defining polynomials!
 
-    let setup_aux = vec![
-        &setup_precomp.q_l_aux, &setup_precomp.q_r_aux, &setup_precomp.q_o_aux, &setup_precomp.q_m_aux, 
-        &setup_precomp.q_c_aux, &setup_precomp.q_add_sel_aux, &setup_precomp.s_id_aux, &setup_precomp.sigma_1_aux, 
-        &setup_precomp.sigma_2_aux, &setup_precomp.sigma_3_aux,
+    let setup_triples : Vec<(AllocatedNum<E>, AllocatedNum<E>, AllocatedNum<E>)> = vec![
+        ( find_by_label("q_l", &domain_values)?.clone(), 
+          find_by_label("q_l", opening_values)?.clone(), 
+          find_setup_value_by_label("q_l", setup_polys)? ),
+
+        ( find_by_label("q_r", &domain_values)?.clone(), 
+          find_by_label("q_r", opening_values)?.clone(), 
+          find_setup_value_by_label("q_r", setup_polys)? ),
+
+        ( find_by_label("q_o", &domain_values)?.clone(), 
+          find_by_label("q_o", opening_values)?.clone(), 
+          find_setup_value_by_label("q_o", setup_polys)? ),
+
+        ( find_by_label("q_m", &domain_values)?.clone(), 
+          find_by_label("q_m", opening_values)?.clone(), 
+          find_setup_value_by_label("q_m", setup_polys)? ),
+
+        ( find_by_label("q_c", &domain_values)?.clone(), 
+          find_by_label("q_c", opening_values)?.clone(), 
+          find_setup_value_by_label("q_c", setup_polys)? ),
+
+        ( find_by_label("q_add_sel", &domain_values)?.clone(), 
+          find_by_label("q_add_sel", opening_values)?.clone(), 
+          find_setup_value_by_label("q_add_sel", setup_polys)? ),
+
+        ( find_by_label("s_id", &domain_values)?.clone(), 
+          find_by_label("s_id", opening_values)?.clone(), 
+          find_setup_value_by_label("s_id", setup_polys)? ),
+
+        ( find_by_label("sigma_1", &domain_values)?.clone(), 
+          find_by_label("sigma_l", opening_values)?.clone(), 
+          find_setup_value_by_label("sigma_l", setup_polys)? ),
+
+        ( find_by_label("sigma_2", &domain_values)?.clone(), 
+          find_by_label("sigma_2", opening_values)?.clone(), 
+          find_setup_value_by_label("sigma_2", setup_polys)? ),
+
+        ( find_by_label("sigma_3", &domain_values)?.clone(), 
+          find_by_label("sigma_3", opening_values)?.clone(), 
+          find_setup_value_by_label("sigma_3", setup_polys)? ),
     ];
-    assert!(setup_aux.windows(2).all(|w| w[0].setup_point == w[1].setup_point));
-    let common_setup_point = setup_precomp.q_l_aux.setup_point;
 
-    let setup_triples : Vec<(&E::Fr, E::Fr, E::Fr)> = vec![
-        (find_poly_value_at_omega("q_l", &arr)?, q_l_at_z, setup_precomp.q_l_aux.setup_value),
-        (find_poly_value_at_omega("q_r", &arr)?, q_r_at_z, setup_precomp.q_r_aux.setup_value),
-        (find_poly_value_at_omega("q_o", &arr)?, q_o_at_z, setup_precomp.q_o_aux.setup_value),
-        (find_poly_value_at_omega("q_m", &arr)?, q_m_at_z, setup_precomp.q_m_aux.setup_value),
-        (find_poly_value_at_omega("q_c", &arr)?, q_c_at_z, setup_precomp.q_c_aux.setup_value),
-        (find_poly_value_at_omega("q_add_sel", &arr)?, q_add_sel_at_z, setup_precomp.q_add_sel_aux.setup_value),
-        (find_poly_value_at_omega("s_id", &arr)?, s_id_at_z, setup_precomp.s_id_aux.setup_value),
-        (find_poly_value_at_omega("sigma_1", &arr)?, sigma_1_at_z, setup_precomp.sigma_1_aux.setup_value),
-        (find_poly_value_at_omega("sigma_2", &arr)?, sigma_2_at_z, setup_precomp.sigma_2_aux.setup_value),
-        (find_poly_value_at_omega("sigma_3", &arr)?, sigma_3_at_z, setup_precomp.sigma_3_aux.setup_value),
-    ];
+    let common_setup_point = setup_precomp.setup_point.clone();
 
-    let (mut res3, _) = combine_at_two_points(setup_triples, &evaluation_point, &z, &common_setup_point, &aggregation_challenge);
+    let (mut res3, _) = combine_at_two_points(
+        &mut cs, setup_triples, &evaluation_point, z, common_setup_point, aggr_challenge)?;
 
-    // res = res1 + res2 * alpha_1 + res_3 * alpha_1 * alpha_2
+    // res = res1 + res2 * alpha_1 + res3 * alpha_1 * alpha_2
+    // we constraint it in the form res - res1 = alpha_1 * (res2 + res3 * alpha2)
+    let mut temp1 = res3.mul(cs.namespace(|| ""), &alpha2)?;
+    
+    let res = AllocatedNum::alloc(cs.namespace(|| ""), || {
+
+        let res1 = res1.get_value().ok_or(SynthesisError::AssignmentMissing)?;
+        let res2 = res2.get_value().ok_or(SynthesisError::AssignmentMissing)?;
+        let mut res3 = res3.get_value().ok_or(SynthesisError::AssignmentMissing)?;
+        let alpha1 = alpha1.get_value().ok_or(SynthesisError::AssignmentMissing)?;
+        let alpha2 = alpha2.get_value().ok_or(SynthesisError::AssignmentMissing)?;
+    })
+
+    let temp2 = res2.mul(cs.namespace(|| ""), &alpha1);
+    let res : Num<E>
     res2.mul_assign(&alpha1);
     res1.add_assign(&res2);
     alpha1.mul_assign(&alpha2);

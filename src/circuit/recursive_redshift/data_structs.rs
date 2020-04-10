@@ -27,9 +27,18 @@ pub fn log2_floor(num: usize) -> usize {
     pow
 }
 
+pub fn find_by_label<X: Clone>(label: Label, arr: &Vec<Labeled<X>>) -> Result<X, SynthesisError> {
+
+    arr.iter().find(|elem| elem.label == label).map(|elem| elem.data.clone()).ok_or(SynthesisError::Unknown)
+}
+
 // TODO: better replace by tag = ENUM
 pub type Label = &'static str;
-pub type CombinerFunction<E> = dyn Fn(Vec<Labeled<&AllocatedNum<E>>>, &Num<E>) -> Result<AllocatedNum<E>, SynthesisError>;
+pub trait CombinerFunction<E: Engine> : 
+    FnMut(dyn ConstraintSystem<E, Root = _>, Vec<Labeled<&AllocatedNum<E>>>, &Num<E>) -> Result<AllocatedNum<E>, SynthesisError> {}
+
+impl<E: Engine, T> CombinerFunction<E> for T 
+where T: FnMut(Vec<Labeled<&AllocatedNum<E>>>, &Num<E>) -> Result<AllocatedNum<E>, SynthesisError> {}
 
 
 pub struct Labeled<T> {
