@@ -17,6 +17,17 @@ use crate::circuit::boolean::*;
 use crate::circuit::recursive_redshift::data_structs::*;
 use crate::circuit::recursive_redshift::oracles::OracleGadget;
 
+
+trait UpperLayerCombiner<E> {
+    
+}
+
+
+struct UpperLayerCombiner<E: Engine> {
+    z: AllocatedNum<E>,
+    aggregation_challenge: AllocatedNum<E>,
+}
+
 // given an evaluation point x and auxiliarly point x_1,
 // aggregation_challenge = alpha (the final value of alpha is also returned!)
 // and an array of pairs (f_i(x), f_i(x_1)) - one pair for each polynomial f_i(t) in question (i \in [0, 1, .., n])
@@ -82,9 +93,9 @@ fn combine_at_two_points<E: Engine, CS: ConstraintSystem<E>>(
     
     // precompute the common slope
     let mut slope : Num<E> = x.clone();
-    slope -= x_1;
-    let mut slope_denum : Num<E> = x_2.into();
-    slope_denum -= x_1;
+    slope -= x_1.clone();
+    let mut slope_denum : Num<E> = x_2.clone().into();
+    slope_denum -= x_1.clone();
     
     slope = Num::mul(cs.namespace(|| ""), &slope, &slope_denum)?.into();
 
@@ -94,7 +105,7 @@ fn combine_at_two_points<E: Engine, CS: ConstraintSystem<E>>(
     for (f_x, f_x_1, f_x_2) in triples.into_iter() {
 
         //evaluate interpolation poly -U_i(x) = -f_x_1 - slope * (f_x_2 - f_x_1) = slope * (f_x_1 - f_x_2) - f_x_1
-        let mut temp : Num<E> = f_x_1.into();
+        let mut temp : Num<E> = f_x_1.clone().into();
         temp -= f_x_2;
         temp = Num::mul(cs.namespace(|| ""), &temp, &slope)?.into();
         temp -= f_x_1;
@@ -110,7 +121,7 @@ fn combine_at_two_points<E: Engine, CS: ConstraintSystem<E>>(
     // now compute the common denominator
     // (x - x_1)(x - x_2) = x^2 - (x_1 + x_2) * x + x_1 * x_2
     let mut t_0 : Num<E> = x_1.clone().into();
-    t_0 += x_2;
+    t_0 += x_2.clone();
     let t_0 = Num::mul(cs.namespace(|| ""), &t_0, &x)?;
     let t_1 = x_1.mul(cs.namespace(|| ""), &x_2)?;
 
@@ -155,13 +166,13 @@ pub fn upper_layer_combiner_impl<E: Engine, I: OracleGadget<E>, CS: ConstraintSy
         (find_by_label("t_high", &domain_values)?.clone(), find_by_label("t_high", opening_values)?.clone()),
     ];
        
-    let (mut res1, mut alpha1) = combine_at_single_point(
+    let (res1, alpha1) = combine_at_single_point(
         &mut cs, pairs, &evaluation_point, z.clone(), aggr_challenge.clone())?;
 
     // combine witness polynomials z_1, z_2, c which are opened at z and z * omega
 
     let temp = Num::from_constant(omega, &cs);
-    let mut z_shifted = Num::mul_by_var_with_coeff(cs.namespace(|| ""), &temp, &z, E::Fr::one())?;
+    let z_shifted = Num::mul_by_var_with_coeff(cs.namespace(|| ""), &temp, &z, E::Fr::one())?;
 
     let witness_triples : Vec<(AllocatedNum<E>, AllocatedNum<E>, AllocatedNum<E>)> = vec![
         ( find_by_label("z_1", &domain_values)?.clone(), 
@@ -177,7 +188,7 @@ pub fn upper_layer_combiner_impl<E: Engine, I: OracleGadget<E>, CS: ConstraintSy
           find_by_label("c_shifted", opening_values)?.clone() ),
     ];
 
-    let (mut res2, alpha2) = combine_at_two_points(
+    let (res2, alpha2) = combine_at_two_points(
         &mut cs, witness_triples, &evaluation_point, z.clone(), z_shifted.clone(), aggr_challenge.clone())?;
 
     // finally combine setup polynomials q_l, q_r, q_o, q_m, q_c, q_add_sel, s_id, sigma_1, sigma_2, sigma_3
@@ -228,31 +239,38 @@ pub fn upper_layer_combiner_impl<E: Engine, I: OracleGadget<E>, CS: ConstraintSy
 
     let common_setup_point = setup_precomp.setup_point.clone();
 
-    let (mut res3, _) = combine_at_two_points(
+    let (res3, _) = combine_at_two_points(
         &mut cs, setup_triples, &evaluation_point, z, common_setup_point, aggr_challenge)?;
 
     // res = res1 + res2 * alpha_1 + res3 * alpha_1 * alpha_2
     // we constraint it in the form res - res1 = alpha_1 * (res2 + res3 * alpha2)
-    let mut temp1 = res3.mul(cs.namespace(|| ""), &alpha2)?;
+    let temp = res3.mul(cs.namespace(|| ""), &alpha2)?;
     
     let res = AllocatedNum::alloc(cs.namespace(|| ""), || {
 
-        let res1 = res1.get_value().ok_or(SynthesisError::AssignmentMissing)?;
-        let res2 = res2.get_value().ok_or(SynthesisError::AssignmentMissing)?;
+        let mut res1 = res1.get_value().ok_or(SynthesisError::AssignmentMissing)?;
+        let mut res2 = res2.get_value().ok_or(SynthesisError::AssignmentMissing)?;
         let mut res3 = res3.get_value().ok_or(SynthesisError::AssignmentMissing)?;
-        let alpha1 = alpha1.get_value().ok_or(SynthesisError::AssignmentMissing)?;
+        let mut alpha1 = alpha1.get_value().ok_or(SynthesisError::AssignmentMissing)?;
         let alpha2 = alpha2.get_value().ok_or(SynthesisError::AssignmentMissing)?;
-    })
 
-    let temp2 = res2.mul(cs.namespace(|| ""), &alpha1);
-    let res : Num<E>
-    res2.mul_assign(&alpha1);
-    res1.add_assign(&res2);
-    alpha1.mul_assign(&alpha2);
-    res3.mul_assign(&alpha1);
-    res1.add_assign(&res3);
+        res2.mul_assign(&alpha1);
+        res1.add_assign(&res2);
+        alpha1.mul_assign(&alpha2);
+        res3.mul_assign(&alpha1);
+        res1.add_assign(&res3);
 
-    Some(res1)
-};
+        Ok(res1)
+    })?;
+
+    cs.enforce(
+        || "",        
+        |lc| lc + alpha1.get_variable(),
+        |lc| lc + res2.get_variable() + temp.get_variable(),
+        |lc| lc + res.get_variable() - res1.get_variable(), 
+    );
+
+    Ok(res)
+}
 
 

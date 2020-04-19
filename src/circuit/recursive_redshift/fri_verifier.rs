@@ -20,7 +20,9 @@ use crate::circuit::boolean::*;
 use crate::circuit::recursive_redshift::data_structs::*;
 
 
-pub struct FriVerifierGadget<E: Engine, I: OracleGadget<E>> {
+pub struct FriVerifierGadget<E: Engine, I: OracleGadget<E>>
+where COMBINER: FnMut(Vec<Labeled<&AllocatedNum<E>>>, &Num<E>) -> Result<AllocatedNum<E>, SynthesisError> 
+{
     pub collapsing_factor : usize,
     //number of iterations done during FRI query phase
     pub num_query_rounds : usize,
@@ -28,21 +30,23 @@ pub struct FriVerifierGadget<E: Engine, I: OracleGadget<E>> {
     pub lde_factor: usize,
     //the degree of the resulting polynomial at the bottom level of FRI
     pub final_degree_plus_one : usize,
+    pub upper_layer_combiner: COMBINER,
 
     _engine_marker : std::marker::PhantomData<E>,
     _oracle_marker : std::marker::PhantomData<I>,
 }
 
 
-impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
+impl<E: Engine, I: OracleGadget<E>, FUNC> FriVerifierGadget<E, I, FUNC> 
+where FUNC: CombinerFunction<E>
+{
 
     fn verify_single_proof_round<CS: ConstraintSystem<E>>(
-        &self,
+        &mut self,
         mut cs: CS,
 
         upper_layer_queries: &[Labeled<Query<E, I>>],
         upper_layer_commitments: &[Labeled<I::Commitment>], 
-        upper_layer_combiner: &CombinerFunction<E>,
         fri_helper: &mut FriUtilsGadget<E>,
 
         queries: &[Query<E, I>],
@@ -110,7 +114,7 @@ impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
                 Labeled::new(x.label, &x.data.values[i])
                 }).collect();
 
-            let res = upper_layer_combiner(labeled_argument, &evaluation_points[i])?;
+            let res = (self.upper_layer_combiner)(labeled_argument, &evaluation_points[i])?;
             values.push(res);
         }
 
@@ -212,11 +216,10 @@ impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
 
 
     pub fn verify_proof<CS: ConstraintSystem<E>>(
-        &self,
+        &mut self,
         mut cs: CS,
         oracle_params: &I::Params,
         // data that is shared among all Fri query rounds
-        upper_layer_combiner: &CombinerFunction<E>,
         upper_layer_commitments: &[Labeled<I::Commitment>],
         commitments: &[I::Commitment],
         final_coefficients: &[AllocatedNum<E>],
@@ -262,7 +265,6 @@ impl<E: Engine, I: OracleGadget<E>> FriVerifierGadget<E, I> {
                 cs.namespace(|| "FRI single round verifier"),
                 &single_round_data.upper_layer_queries[..],
                 upper_layer_commitments,
-                upper_layer_combiner,
                 &mut fri_helper,
 
                 &single_round_data.queries[..],

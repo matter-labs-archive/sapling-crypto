@@ -102,7 +102,7 @@ pub fn get_fri_challenges<E, O, T, CS>(
     proof: &BatchedFriProof<E, O>,
     channel: &mut T,
 ) -> Result<Vec<AllocatedNum<E>>, SynthesisError> 
-where E: Engine, O: OracleGadget<E, Commitment = AllocatedNum<E>>, T: ChannelGadget<E>, CS: ConstraintSystem<E>>
+where E: Engine, O: OracleGadget<E, Commitment = AllocatedNum<E>>, T: ChannelGadget<E>, CS: ConstraintSystem<E>
 {
     
     let mut fri_challenges = vec![];
@@ -411,11 +411,12 @@ where
         let aggregation_challenge = channel.produce_challenge(unnamed(cs))?;
 
         let mut upper_layer_commitments = proof.commitments;
+        let opening_values = proof.opening_values;
         upper_layer_commitments.extend(precomputation.data.iter().map(|item| {
             Labeled::new(item.label, item.data.commitment.clone())
         }));
       
-        let fri_challenges = self.get_fri_challenges(cs, &proof.fri_proof, &mut channel)?;
+        let fri_challenges = get_fri_challenges::<E, O, T, _>(cs, &proof.fri_proof, &mut channel)?;
        
         let natural_first_element_indexes = (0..self.fri_params.R).map(|_| {
             let packed = channel.produce_challenge(unnamed(cs))?;
@@ -425,22 +426,25 @@ where
             Ok(bits)
         }).collect::<Result<_, SynthesisError>>()?;
 
+        let mut combiner_cs = cs.namespace(|| "upper layer combiner");
+        let fri_cs = cs.namespace(|| "FRI");
+
         let combiner_func = 
             |domain_values: Vec<Labeled<&AllocatedNum<E>>>, ev_p :&Num<E>| -> Result<AllocatedNum<E>, SynthesisError> 
         {
             upper_layer_combiner_impl(
-                cs.namespace(|| "upper layer combiner"),
+                unnamed(&mut combiner_cs),
                 domain_values,
                 ev_p,
                 &precomputation,
-                &proof.opening_values,
+                &opening_values,
                 z.clone(),
                 aggregation_challenge.clone(),
                 &omega,
             )
         };
 
-        let fri_verifier_gadget = FriVerifierGadget::<E, O, _> {
+        let mut fri_verifier_gadget = FriVerifierGadget::<E, O, _> {
             collapsing_factor : self.fri_params.collapsing_factor,
             //number of iterations done during FRI query phase
             num_query_rounds : self.fri_params.R,
@@ -453,10 +457,9 @@ where
             _engine_marker : std::marker::PhantomData::<E>,
             _oracle_marker : std::marker::PhantomData::<O>,
         };
-
-        
+       
         let is_fri_valid = fri_verifier_gadget.verify_proof(
-            cs.namespace(|| "verify FRI proof"),
+            cs,
             &self.oracle_params,
             &upper_layer_commitments,
             &proof.fri_proof.commitments,
