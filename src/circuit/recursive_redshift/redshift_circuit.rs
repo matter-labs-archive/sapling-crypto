@@ -26,7 +26,7 @@ use crate::circuit::recursive_redshift::channel::*;
 use crate::circuit::recursive_redshift::fri_verifier::*;
 
 use super::data_structs::*;
-use super::upper_layer_combiner::upper_layer_combiner_impl;
+use super::upper_layer_combiner::*;
 
 // TODO: FriParams are copyable - stop clonning!
 
@@ -426,22 +426,12 @@ where
             Ok(bits)
         }).collect::<Result<_, SynthesisError>>()?;
 
-        let mut combiner_cs = cs.namespace(|| "upper layer combiner");
-        let fri_cs = cs.namespace(|| "FRI");
-
-        let combiner_func = 
-            |domain_values: Vec<Labeled<&AllocatedNum<E>>>, ev_p :&Num<E>| -> Result<AllocatedNum<E>, SynthesisError> 
-        {
-            upper_layer_combiner_impl(
-                unnamed(&mut combiner_cs),
-                domain_values,
-                ev_p,
-                &precomputation,
-                &opening_values,
-                z.clone(),
-                aggregation_challenge.clone(),
-                &omega,
-            )
+        let upper_layer_combiner = ReshiftCombiner::<E, O> {
+            setup_precomp: precomputation,
+            opening_values,
+            z,
+            aggr_challenge: aggregation_challenge,
+            omega,
         };
 
         let mut fri_verifier_gadget = FriVerifierGadget::<E, O, _> {
@@ -452,14 +442,14 @@ where
             lde_factor: self.fri_params.lde_factor,
             //the degree of the resulting polynomial at the bottom level of FRI
             final_degree_plus_one : self.fri_params.final_degree_plus_one,
-            upper_layer_combiner : combiner_func,
+            upper_layer_combiner,
 
             _engine_marker : std::marker::PhantomData::<E>,
             _oracle_marker : std::marker::PhantomData::<O>,
         };
        
         let is_fri_valid = fri_verifier_gadget.verify_proof(
-            cs,
+            cs.namespace(|| "FRI verification"),
             &self.oracle_params,
             &upper_layer_commitments,
             &proof.fri_proof.commitments,
@@ -469,7 +459,7 @@ where
             &proof.fri_proof.fri_round_queries,
         )?;
 
-        Boolean::enforce_equal(cs.namespace(|| "check output bit"), &is_fri_valid, &Boolean::constant(true));
+        Boolean::enforce_equal(cs.namespace(|| "check output bit"), &is_fri_valid, &Boolean::constant(true))?;
 
         Ok(())
     }

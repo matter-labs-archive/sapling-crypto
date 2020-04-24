@@ -18,10 +18,10 @@ use crate::circuit::num::*;
 use crate::circuit::boolean::*;
 
 use crate::circuit::recursive_redshift::data_structs::*;
+use crate::circuit::recursive_redshift::upper_layer_combiner::UpperLayerCombiner;
 
 
-pub struct FriVerifierGadget<E: Engine, I: OracleGadget<E>>
-where COMBINER: FnMut(Vec<Labeled<&AllocatedNum<E>>>, &Num<E>) -> Result<AllocatedNum<E>, SynthesisError> 
+pub struct FriVerifierGadget<E: Engine, I: OracleGadget<E>, C: UpperLayerCombiner<E>>
 {
     pub collapsing_factor : usize,
     //number of iterations done during FRI query phase
@@ -30,15 +30,14 @@ where COMBINER: FnMut(Vec<Labeled<&AllocatedNum<E>>>, &Num<E>) -> Result<Allocat
     pub lde_factor: usize,
     //the degree of the resulting polynomial at the bottom level of FRI
     pub final_degree_plus_one : usize,
-    pub upper_layer_combiner: COMBINER,
+    pub upper_layer_combiner: C,
 
-    _engine_marker : std::marker::PhantomData<E>,
-    _oracle_marker : std::marker::PhantomData<I>,
+    pub _engine_marker : std::marker::PhantomData<E>,
+    pub _oracle_marker : std::marker::PhantomData<I>,
 }
 
 
-impl<E: Engine, I: OracleGadget<E>, FUNC> FriVerifierGadget<E, I, FUNC> 
-where FUNC: CombinerFunction<E>
+impl<E: Engine, I: OracleGadget<E>, C: UpperLayerCombiner<E>> FriVerifierGadget<E, I, C> 
 {
 
     fn verify_single_proof_round<CS: ConstraintSystem<E>>(
@@ -114,7 +113,11 @@ where FUNC: CombinerFunction<E>
                 Labeled::new(x.label, &x.data.values[i])
                 }).collect();
 
-            let res = (self.upper_layer_combiner)(labeled_argument, &evaluation_points[i])?;
+            let res = self.upper_layer_combiner.combine(
+                cs.namespace(|| "upper layer combiner"), 
+                labeled_argument, 
+                &evaluation_points[i]
+            )?;
             values.push(res);
         }
 

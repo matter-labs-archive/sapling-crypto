@@ -17,17 +17,6 @@ use crate::circuit::boolean::*;
 use crate::circuit::recursive_redshift::data_structs::*;
 use crate::circuit::recursive_redshift::oracles::OracleGadget;
 
-
-trait UpperLayerCombiner<E> {
-    
-}
-
-
-struct UpperLayerCombiner<E: Engine> {
-    z: AllocatedNum<E>,
-    aggregation_challenge: AllocatedNum<E>,
-}
-
 // given an evaluation point x and auxiliarly point x_1,
 // aggregation_challenge = alpha (the final value of alpha is also returned!)
 // and an array of pairs (f_i(x), f_i(x_1)) - one pair for each polynomial f_i(t) in question (i \in [0, 1, .., n])
@@ -271,6 +260,47 @@ pub fn upper_layer_combiner_impl<E: Engine, I: OracleGadget<E>, CS: ConstraintSy
     );
 
     Ok(res)
+}
+
+
+pub trait UpperLayerCombiner<E: Engine> {
+    fn combine<CS: ConstraintSystem<E>>(
+        &self,
+        cs: CS, 
+        domain_values: Vec<Labeled<&AllocatedNum<E>>>,
+        evaluation_point : &Num<E>
+    ) -> Result<AllocatedNum<E>, SynthesisError>; 
+}
+
+
+pub struct ReshiftCombiner<E: Engine, I: OracleGadget<E>> {
+    pub setup_precomp: RedshiftSetupPrecomputation<E, I>,
+    pub opening_values: LabeledVec<AllocatedNum<E>>,
+    pub z: AllocatedNum<E>,
+    pub aggr_challenge : AllocatedNum<E>,
+    pub omega: E::Fr,
+}
+
+impl<E: Engine, I: OracleGadget<E>> UpperLayerCombiner<E> for ReshiftCombiner<E, I> {
+
+    fn combine<CS: ConstraintSystem<E>>(
+        &self,
+        cs: CS, 
+        domain_values: Vec<Labeled<&AllocatedNum<E>>>,
+        evaluation_point : &Num<E>
+    ) -> Result<AllocatedNum<E>, SynthesisError>
+    {
+        upper_layer_combiner_impl(
+            cs,
+            domain_values,
+            evaluation_point,
+            &self.setup_precomp,
+            &self.opening_values,
+            self.z.clone(),
+            self.aggr_challenge.clone(),
+            &self.omega,
+        )
+    }
 }
 
 

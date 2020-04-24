@@ -34,12 +34,6 @@ pub fn find_by_label<X: Clone>(label: Label, arr: &Vec<Labeled<X>>) -> Result<X,
 
 // TODO: better replace by tag = ENUM
 pub type Label = &'static str;
-pub trait CombinerFunction<E: Engine> : 
-    FnMut(dyn ConstraintSystem<E, Root = _>, Vec<Labeled<&AllocatedNum<E>>>, &Num<E>) -> Result<AllocatedNum<E>, SynthesisError> {}
-
-impl<E: Engine, T> CombinerFunction<E> for T 
-where T: FnMut(Vec<Labeled<&AllocatedNum<E>>>, &Num<E>) -> Result<AllocatedNum<E>, SynthesisError> {}
-
 
 pub struct Labeled<T> {
     pub label: Label,

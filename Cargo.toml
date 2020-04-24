@@ -19,18 +19,19 @@ nightly = ["bellman/nightly"]
 wasm = ["bellman/wasm"]
  
 [dependencies]
-rand = "0.4"
-digest = "0.8"
-byteorder = "1"
-tiny-keccak = {version = "2.0", features = ["keccak"] }
-serde = "1.0"
-serde_derive = "1.0"
-sha2 = "0.8.0"
+# rand = "0.4"
+# digest = "0.8"
+# byteorder = "1"
+# tiny-keccak = {version = "2.0", features = ["keccak"] }
+# # serde = "1.0"
+# # serde_derive = "1.0"
+# sha2 = "0.8.0"
 
-#bellman = {package = "bellman_ce", path = "../bellman"}
-bellman = { package = "bellman_ce", git = "https://github.com/matter-labs/bellman.git", branch = "recursive_plonk" }
+#pairing = {package = "pairing_ce", git = "https://github.com/matter-labs/pairing.git", branch = "affine-ops", rev = "af828bd2fb1c83c49fe202a0b2b3cc5d177d4d18" }
+bellman = {package = "bellman_ce", path = "C:/Users/Konstantce/Desktop/bellman/bellman"}
+#bellman = { package = "bellman_ce", git = "https://github.com/matter-labs/bellman.git", branch = "recursive_plonk" }
 #bellman = {package = "bellman_ce", version = "0.3", default-features = false}
-blake2-rfc_bellman_edition = "0.0.1"
+#blake2-rfc_bellman_edition = "0.0.1"
 
 [dev-dependencies]
 hex-literal = "0.2"
