@@ -144,7 +144,7 @@ impl JubjubEngine for Bn256 {
     type Fs = self::fs::Fs;
     type Params = JubjubBn256;
 }
-
+#[derive(Clone)]
 pub struct JubjubBn256 {
     edwards_a: Fr,
     edwards_d: Fr,

@@ -422,7 +422,7 @@ impl<E: Engine> AllocatedNum<E> {
         a: &Self,
         b: &Self,
         condition: &Boolean
-    ) -> Result<(Self), SynthesisError>
+    ) -> Result<Self, SynthesisError>
         where CS: ConstraintSystem<E>
     {
         let c = Self::alloc(
