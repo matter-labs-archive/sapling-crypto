@@ -41,6 +41,13 @@ impl<E: Engine> Clone for AllocatedNum<E> {
 }
 
 impl<E: Engine> AllocatedNum<E> {
+    // pub fn default<CS: ConstraintSystem<E>>() -> Self {
+    //     AllocatedNum {
+    //         value: Some(E::Fr::one()),
+    //         variable: CS::one()
+    //     }
+    // }
+
     pub fn alloc<CS, F>(
         mut cs: CS,
         value: F,
@@ -62,6 +69,45 @@ impl<E: Engine> AllocatedNum<E> {
             variable: var
         })
     }
+
+    pub fn alloc2<CS: ConstraintSystem<E>>(mut cs: CS, value: Option<E::Fr>) -> Result<Self, SynthesisError> {
+
+        let variable = cs.alloc(|| "num", || value.ok_or(SynthesisError::AssignmentMissing))?;
+
+        Ok(AllocatedNum {
+            value,
+            variable
+        })
+    }
+
+    pub fn alloc_input<CS, F>(
+        mut cs: CS,
+        value: F,
+    ) -> Result<Self, SynthesisError>
+        where CS: ConstraintSystem<E>,
+              F: FnOnce() -> Result<E::Fr, SynthesisError>
+    {
+        let mut new_value = None;
+        let var = cs.alloc_input(|| "num", || {
+            let tmp = value()?;
+
+            new_value = Some(tmp);
+
+            Ok(tmp)
+        })?;
+
+        Ok(AllocatedNum {
+            value: new_value,
+            variable: var
+        })
+    }
+
+    pub fn from_var(variable: Variable, value: Option<E::Fr>) -> Self {
+        AllocatedNum {
+            value,
+            variable,
+        }
+    } 
 
     pub fn inputize<CS>(
         &self,
@@ -452,6 +498,43 @@ impl<E: Engine> AllocatedNum<E> {
     /// Limits number of bits. The easiest example when required
     /// is to add or subtract two "small" (with bit length smaller 
     /// than one of the field) numbers and check for overflow
+    /// return the bit packed result
+    pub fn convert_to_bits<CS>(
+        &self,
+        mut cs: CS,
+        number_of_bits: usize
+    ) -> Result<Vec<Boolean>, SynthesisError>
+        where CS: ConstraintSystem<E>
+    {
+        // do the bit decomposition and check that higher bits are all zeros
+
+        let mut bits = self.into_bits_le(
+            cs.namespace(|| "unpack to limit number of bits")
+        )?;
+
+        let lower_bits : Vec<Boolean> = bits.drain(0..number_of_bits).into_iter().map(|b| Boolean::from(b)).collect();
+
+        // repack
+
+        let mut top_bits_lc = Num::<E>::zero();
+        let mut coeff = E::Fr::one();
+        for bit in bits.into_iter() {
+            top_bits_lc = top_bits_lc.add_bool_with_coeff(CS::one(), &bit, coeff);
+            coeff.double();
+        }
+
+        // enforce packing and zeroness
+        cs.enforce(
+            || "repack top bits",
+            |lc| lc,
+            |lc| lc + CS::one(),
+            |_| top_bits_lc.lc(E::Fr::one())
+        );
+
+        Ok(lower_bits)
+    }
+
+    /// same as previousm but doesn't return anything
     pub fn limit_number_of_bits<CS>(
         &self,
         mut cs: CS,
@@ -610,6 +693,37 @@ impl<E: Engine> AllocatedNum<E> {
     pub fn get_variable(&self) -> Variable {
         self.variable
     }
+
+    // Montgomery double and add algorithm
+    pub fn pow<'a, CS, I>(mut cs: CS, base: &Self, x: I) -> Result<Self, SynthesisError> 
+    where CS: ConstraintSystem<E>, I: DoubleEndedIterator<Item = &'a Boolean> 
+    {
+        let mut r0 = Self::from_var(CS::one(), Some(E::Fr::one()));
+        let mut r1 = base.clone();
+        for b in x.rev() {
+            // RO = RO * R1 if b == 1 else R0^2
+            // R1 = R1^2 if b == 1 else R0 * R1
+            let r0_squared = r0.square(cs.namespace(|| "square R0"))?;
+            let r1_squared = r1.square(cs.namespace(|| "square R1"))?;
+            let r0_times_r1 = r0.mul(cs.namespace(|| "R0 x R1"), &r1)?;
+            
+            r0 = AllocatedNum::conditionally_select(
+                cs.namespace(|| "construct R0 iteration"),
+                &r0_times_r1,
+                &r0_squared,
+                b,
+            )?;
+
+            r1 = AllocatedNum::conditionally_select(
+                cs.namespace(|| "construct R1 iteration"),
+                &r1_squared,
+                &r0_times_r1,
+                b,
+            )?;
+        }
+
+        Ok(r0)
+    }
 }
 
 pub struct Num<E: Engine> {
@@ -635,6 +749,7 @@ impl<E: Engine> Clone for Num<E> {
     }
 }
 
+
 impl<E: Engine> Num<E> {
     pub fn zero() -> Self {
         Num {
@@ -643,8 +758,19 @@ impl<E: Engine> Num<E> {
         }
     }
 
+    pub fn from_constant<CS: ConstraintSystem<E>>(c: &E::Fr, cs: &CS) -> Self {
+        Num {
+            value: Some(c.clone()),
+            lc: LinearCombination::zero() + (c.clone(), CS::one())
+        }
+    }
+
     pub fn get_value(&self) -> Option<E::Fr> {
         self.value
+    }
+
+    pub fn get_lc(&self) -> &LinearCombination<E> {
+        &self.lc
     }
 
     pub fn lc(&self, coeff: E::Fr) -> LinearCombination<E> {
@@ -805,7 +931,199 @@ impl<E: Engine> Num<E> {
         }
         self.lc = lc;
     }
+
+    pub fn sub_assign(
+        &mut self,
+        other: &Self
+    )
+    {
+        let newval = match (self.value, other.get_value()) {
+            (Some(mut curval), Some(otherval)) => {
+                curval.sub_assign(&otherval);
+
+                Some(curval)
+            },
+            _ => None
+        };
+
+        self.value = newval;
+        let mut lc = LinearCombination::zero();
+        // std::mem::swap(&mut self.lc, &mut lc);
+        use std::collections::HashMap;
+        let mut final_coeffs: HashMap<bellman::Variable, E::Fr> = HashMap::new();
+        for (var, coeff) in self.lc.as_ref() {
+            if final_coeffs.get(var).is_some() {
+                if let Some(existing_coeff) = final_coeffs.get_mut(var) {
+                    existing_coeff.add_assign(&coeff);
+                } 
+            } else {
+                final_coeffs.insert(*var, *coeff);
+            }
+        }
+
+        for (var, coeff) in other.lc.as_ref() {
+            if final_coeffs.get(var).is_some() {
+                if let Some(existing_coeff) = final_coeffs.get_mut(var) {
+                    existing_coeff.sub_assign(&coeff);
+                }
+            } else {
+                final_coeffs.insert(*var, *coeff);
+            }
+        }
+        for (var, coeff) in final_coeffs.into_iter() {
+            lc = lc + (coeff, var);
+        }
+        self.lc = lc;
+    }
+
+    /// check is the combination in question exactly contains the only one element (or even empty)
+    /// it yes - recombine and return that unique element
+    pub fn simplify<CS: ConstraintSystem<E>>(&mut self, mut cs: CS) -> Result<AllocatedNum<E>, SynthesisError> {
+
+        let in_lc = self.get_lc();
+
+        assert!(!in_lc.is_empty(), " lc is empty before simplification");
+        
+        let res = match in_lc.is_simple() {
+            Some(x) => AllocatedNum::from_var(x, self.get_value()),
+            None => {
+                let out_alloc = AllocatedNum::alloc(
+                    cs.namespace(|| "simplified element"),
+                    || { self.get_value().ok_or(SynthesisError::AssignmentMissing)} 
+                )?;
+
+                cs.enforce(
+                    || "simplified element = input element", 
+                    |lc| lc + in_lc, 
+                    |lc| lc + CS::one(),
+                    |lc| lc + out_alloc.get_variable(),
+                );
+                    
+                // As we've constrained this currentcombination, we can
+                // substitute for the new variable to shorten subsequent combinations.
+                self.lc = LinearCombination::zero() + out_alloc.get_variable();
+                
+                out_alloc
+            }, 
+        };
+
+        Ok(res)
+    }
+
+    /// Sometimes we apriori know that our Num is simple (contains only one AllocedNum with trivial coefficient).
+    /// This method tries to get that AllocatedNum and returns error if we are mistaken in our assumption 
+    /// of the forn of Num (i.e. it is not simple)
+    pub fn force_simplify(&self) -> Result<AllocatedNum<E>, SynthesisError> {
+        self.get_lc().is_simple().map(|x| AllocatedNum::from_var(x, self.get_value())).ok_or(SynthesisError::Unknown)
+    }
+
+    /// in R1CS multiplication of two linear combinations will inevitably lead
+    /// to the allocation of new variable
+    pub fn mul<CS>(mut cs: CS, left: &Self, right: &Self) -> Result<AllocatedNum<E>, SynthesisError>
+    where CS: ConstraintSystem<E>
+    {
+        let res = AllocatedNum::alloc(
+            cs.namespace(|| "mul of two Nums"), 
+            || {
+            match (left.get_value(), right.get_value()) {
+                (Some(mut x), Some(y)) => {
+                    x.mul_assign(&y);
+                    Ok(x)
+                }
+                (_, _) => Err(SynthesisError::AssignmentMissing)       
+            }
+        })?;
+        
+        cs.enforce(
+            || "multiplication check",
+            |lc| lc + left.get_lc(),
+            |lc| lc + right.get_lc(),
+            |lc| lc + (E::Fr::one(), res.get_variable()),
+        );
+
+        Ok(res)
+    }
+
+    pub fn mul_by_var_with_coeff<CS>(cs: CS, num: &Self, var: &AllocatedNum<E>, coef: E::Fr) -> Result<AllocatedNum<E>, SynthesisError>
+    where CS: ConstraintSystem<E> {
+        
+        let value = var.get_value().and_then(|mut x| {
+            x.mul_assign(&coef);
+            Some(x)
+        });
+
+        let temp_num = Num {
+            value, 
+            lc: LinearCombination::zero() + (coef, var.get_variable()),
+        };
+        
+        Self::mul(cs, num, &temp_num)
+    }
+
+    pub fn enforce<CS: ConstraintSystem<E>>(mut cs: CS, a: &Self, b: &Self, c: &Self) 
+    {
+        cs.enforce(
+            || "Num: enforce",
+            |lc| lc + a.get_lc(),
+            |lc| lc + b.get_lc(),
+            |lc| lc + c.get_lc(),
+        ); 
+    }
+
+    pub fn div<CS: ConstraintSystem<E>>(mut cs: CS, nom: &Self, denom: &Self) -> Result<AllocatedNum<E>, SynthesisError> {
+
+        let quotient = AllocatedNum::alloc(
+            cs.namespace(|| "quotient"), 
+            || {
+                let mut nom_value = nom.get_value().ok_or(SynthesisError::AssignmentMissing)?;
+                let denom_value = denom.get_value().ok_or(SynthesisError::AssignmentMissing)?;
+                let denom_value_inv = denom_value.inverse().ok_or(SynthesisError::DivisionByZero)?;
+                nom_value.mul_assign(&denom_value_inv);
+                Ok(nom_value)
+            }
+        )?;
+
+        cs.enforce(
+            || "denom * quotient == nom",
+            |lc| lc + denom.get_lc(),
+            |lc| lc + quotient.get_variable(),
+            |lc| lc + nom.get_lc(),
+        );
+
+        Ok(quotient)
+    }
 }
+
+// some additional syntactis sugar
+use std::ops::{AddAssign, SubAssign};
+
+impl<E: Engine> AddAssign<AllocatedNum<E>> for Num<E> {
+    fn add_assign(&mut self, other: AllocatedNum<E>) {
+        self.mut_add_number_with_coeff(&other, E::Fr::one());
+    }
+}
+
+impl<E: Engine> SubAssign<AllocatedNum<E>> for Num<E> {
+    
+    fn sub_assign(&mut self, other: AllocatedNum<E>) {
+        let mut minus_one = E::Fr::one();
+        minus_one.negate();
+        self.mut_add_number_with_coeff(&other, minus_one);
+    }
+}
+
+impl<E: Engine> AddAssign<&Num<E>> for Num<E> {
+    fn add_assign(&mut self, other: &Num<E>) {
+        self.add_assign(other);
+    }
+}
+
+impl<E: Engine> SubAssign<&Num<E>> for Num<E> {
+    fn sub_assign(&mut self, other: &Num<E>) {
+        self.sub_assign(other);
+    }
+}
+
 
 #[cfg(test)]
 mod test {

@@ -20,6 +20,8 @@ pub mod as_waksman;
 pub mod poseidon_hash;
 pub mod merkle;
 
+pub mod recursive_redshift;
+
 pub mod sapling;
 pub mod sprout;
 
